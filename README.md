@@ -1,48 +1,59 @@
-# rocm-repo-template
+# rocm-community-kernels
 
-The `rocm-repo-template` repository serves as the standard template for creating new repositories within the ROCm GitHub organization. It provides a consistent repository structure, governance artifacts, and security controls to help teams onboard new projects quickly while adhering to ROCm security, compliance, and development standards.
+> TODO: Add a one-line project description
 
-## Included Repository Files
+## Overview
 
-The template includes the following foundational files:
+Describe the project, its purpose, and how it fits within the ROCm ecosystem.
 
-- `README.md` – Project overview and documentation
-- `.gitignore` – Standard Git ignore rules
-- `LICENSE` – Repository licensing information
-- `CONTRIBUTING.md` – Contribution guidelines
-- `SECURITY.md` – Security reporting and disclosure process
-- `.github/CODEOWNERS` – Code ownership and review requirements
+## Status
 
-## Included Security Controls
+Project Status: Active Development
 
-The template provides preconfigured GitHub Actions workflows to enable security scanning (PR and Weekly) and governance by default:
+> Update this section as appropriate.
 
-- **CodeQL** (`.github/workflows/codeql.yml`)
-  Static application security testing (SAST) for code vulnerabilities.
+## Prerequisites
 
-- **GitLeaks** (`.github/workflows/gitleaks.yml`)
-  Secret detection to prevent credential leakage.
+- Supported operating systems
+- Supported ROCm versions
+- Supported GPU architectures
+- Required toolchain versions
+- External dependencies
 
-- **Zizmor** (`.github/workflows/zizmor.yml`)
-  GitHub Actions workflow security analysis.
+## Installation
 
-- **Bandit** (`.github/workflows/bandit.yml`)
-  Python security linting and vulnerability detection.
+### Package Installation
 
-- **PR Security Scan** (`.github/workflows/pr-security-scan.yml`)
-  Security Controls executed on pull requests.
+Provide package installation instructions here.
 
-- **Weekly Security Scan** (`.github/workflows/weekly-security-scan.yml`)
-  Scheduled security scans to continuously monitor repository health.
+### Build From Source
 
-## Purpose
+Provide source build instructions here.
 
-By inheriting this template, all new ROCm repositories start with a common baseline for:
+## Usage
 
-- Repository governance
-- Secure development practices
-- Code ownership and review controls
-- Automated security scanning
-- Compliance and audit readiness
+Provide usage examples and common workflows.
 
-This ensures consistency, reduces onboarding effort, and helps maintain security standards across the ROCm ecosystem
+## Documentation
+
+Link to additional documentation or the `docs/` directory.
+
+## Contributing
+
+Contributions are welcome! Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) for the
+development workflow, coding standards, and how to submit pull requests. By
+participating you agree to abide by the project's Code of Conduct.
+
+## Security
+
+Please follow [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
+
+## Maintainers
+
+| Role           | Contact         |
+| -------------- | --------------- |
+| Technical Lead | TODO: Add maintainers |
+
+## License
+
+This project is licensed under the terms described in the [LICENSE](LICENSE) file.
