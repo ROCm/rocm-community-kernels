@@ -28,8 +28,6 @@ duties and when a kernel is removed, is in
   and changes to them, go to AITER, which publishes AMD's own kernels to `amd/*`. The
   `aiter-` name prefix and the `amd` and `amd-aiter` Hub organisations are reserved.
 
-Please open an issue before starting on a new kernel, so we can agree that it fits.
-
 ## How to add a kernel
 
 Each kernel is one top-level directory, published as one Hub repository. The
@@ -89,6 +87,8 @@ changes:
   (`scripts/check_wrapping.py --community`), and `kernel-builder check-config`.
 - **Build and GPU test**: one representative ROCm variant with kernel-builder, then the
   `kernels_ci` tests on an MI350, loading the fresh build through `get_kernel()`.
+
+Initially, CI tests on an MI350 only; more hardware variants will be added shortly.
 
 For first-time contributors, a maintainer approves the workflow run before it starts.
 To merge, a pull request needs "Kernel CI result" and the pre-commit checks to pass and
