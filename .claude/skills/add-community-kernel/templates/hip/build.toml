@@ -1,0 +1,24 @@
+[general]
+name = "my-kernel"
+version = 1
+edition = 6
+license = "Apache-2.0"
+backends = ["rocm"]
+
+[general.hub]
+repo-id = "rocm-community/my-kernel"
+
+[torch]
+src = [
+    "torch-ext/torch_binding.cpp",
+    "torch-ext/torch_binding.h",
+]
+
+[kernel.my_kernel_rocm]
+language = "cpp-rocm"
+depends = ["torch"]
+rocm-archs = [
+    "gfx942",
+    "gfx950",
+]
+src = ["my_kernel_hip/scale.hip"]
