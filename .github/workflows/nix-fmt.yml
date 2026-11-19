@@ -1,0 +1,41 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+#
+# Checks that every .nix file is formatted with the repository's formatter
+# (`nix fmt`, nixfmt-tree from flake.nix).
+
+name: Nix formatting
+
+on:
+  pull_request:
+    paths:
+      - "**.nix"
+      - "flake.lock"
+      - ".github/workflows/nix-fmt.yml"
+  push:
+    branches: [main]
+    paths:
+      - "**.nix"
+      - "flake.lock"
+      - ".github/workflows/nix-fmt.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nix-fmt:
+    name: Check Nix formatting
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Check formatting
+        run: nix fmt -- --ci

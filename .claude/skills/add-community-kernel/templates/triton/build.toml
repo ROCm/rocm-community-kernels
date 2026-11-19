@@ -1,0 +1,13 @@
+[general]
+name = "my-kernel"
+version = 1
+edition = 6
+license = "Apache-2.0"
+backends = ["rocm"]
+
+[general.hub]
+repo-id = "rocm-community/my-kernel"
+
+[torch-noarch]
+
+[kernel]

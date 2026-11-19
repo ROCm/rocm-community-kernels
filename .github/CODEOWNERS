@@ -2,16 +2,15 @@
 # Learn about CODEOWNERS file format:
 #   https://help.github.com/en/articles/about-code-owners
 #
-# This is a comment.
-# Each line is a file pattern followed by one or more owners.
+# Branch protection requires a code owner's approval (.github/rulesets/main.json),
+# so every pull request needs an AMD repository maintainer.
 #
+# Kernel maintainers are listed in .github/kernel-maintainers.json, not here:
+# GitHub only accepts code owners with write access to the repository, which
+# outside contributors don't have.
 #
-# This file itself
+# Default owners: the AMD repository maintainers.
+*                       @ROCm/rocm-community-kernels-maintainers
+#
+# This file itself. It comes last, so that it takes precedence.
 /.github/CODEOWNERS     @ROCm/rocm-security-gh-admins
-#
-# These owners will be the default owners for everything in
-# the repo. Unless a later match takes precedence,
-# @ROCm/rocm-security-gh-admins will be requested for
-# review when someone opens a pull request.
-*   @ROCm/rocm-security-gh-admins
-#

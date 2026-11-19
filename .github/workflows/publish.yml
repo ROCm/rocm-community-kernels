@@ -1,0 +1,276 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+#
+# Publishes one kernel to the Hugging Face Hub, on request. The jobs are split so
+# that the Hub write token never shares a job with kernel code, and no token is in
+# the environment of a step that runs kernel code:
+#
+#   target   resolve the upload target (scripts/publish_target.py): the
+#            organisation from the hub_org input or the HUB_ORG variable, the name
+#            and version from build.toml, branch v<version> by default
+#   build    every ROCm variant (.#backendBundle.rocm), check-abi and the GPU tests
+#            on an MI350 (rocm-build-test.yml); no secrets
+#   upload   waits for approval in the hf-rocm-community environment (AMD
+#            maintainers), then signs each variant's metadata.json with cosign and
+#            runs `kernel-builder upload`; holds the Hub token, never runs kernel code.
+#            A repository the upload creates is private (`--private`; public is
+#            kernel-builder's default); an existing one keeps its visibility
+#   verify   on the MI350, in what a user has: a ROCm PyTorch image (the
+#            CI_USER_IMAGE variable) plus `kernels` and pytest, no Nix. Its Torch
+#            and ROCm must match a variant the build makes. One step
+#            downloads the kernel with a read-only token (HF_READ_TOKEN;
+#            scripts/ci_download.py, nothing is imported), then `get_kernel()`
+#            loads it offline from that download, with no token, and the
+#            kernel's `kernels_ci` tests run on it
+#
+# Only main is published: the workflow refuses other refs, and the environment
+# should allow deployments from main only.
+
+name: Publish kernel
+run-name: Publish ${{ inputs.kernel }} to ${{ inputs.hub_org || vars.HUB_ORG }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel:
+        description: Kernel directory to publish
+        required: true
+        type: string
+      branch:
+        description: "Hub branch (default: v<version> from build.toml)"
+        required: false
+        type: string
+        default: ""
+      hub_org:
+        description: "Hub organisation (default: the HUB_ORG repository variable)"
+        required: false
+        type: string
+        default: ""
+      trust_remote_code:
+        description: Load with trust_remote_code (organisations that aren't trusted publishers)
+        required: false
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.kernel }}
+  cancel-in-progress: false
+
+jobs:
+  target:
+    name: Resolve target
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      repo-id: ${{ steps.target.outputs.repo-id }}
+      source-repo-id: ${{ steps.target.outputs.source-repo-id }}
+      branch: ${{ steps.target.outputs.branch }}
+      also-main: ${{ steps.target.outputs.also-main }}
+      load-args: ${{ steps.target.outputs.load-args }}
+      config-dir: ${{ steps.target.outputs.config-dir }}
+    steps:
+      - name: Publish from main only
+        if: github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::Only main is published (only reviewed, merged code); this run is on $REF"
+          exit 1
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve the Hub repository and branch
+        id: target
+        env:
+          KERNEL: ${{ inputs.kernel }}
+          BRANCH: ${{ inputs.branch }}
+          HUB_ORG: ${{ inputs.hub_org || vars.HUB_ORG }}
+        run: |
+          python3 scripts/publish_target.py "$KERNEL" --hub-org "$HUB_ORG" \
+            --branch "$BRANCH" --github-output
+
+  build:
+    name: Build every variant
+    needs: target
+    permissions:
+      contents: read
+    uses: ./.github/workflows/rocm-build-test.yml
+    with:
+      kernel: ${{ inputs.kernel }}
+      variants: all
+      keep-build: true
+
+  upload:
+    name: Sign and upload
+    needs: [target, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment:
+      name: hf-rocm-community
+      url: https://huggingface.co/${{ needs.target.outputs.repo-id }}/tree/${{ needs.target.outputs.branch }}
+    permissions:
+      contents: read
+      id-token: write # cosign keyless signing
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: build-${{ inputs.kernel }}
+          path: ${{ inputs.kernel }}/build
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Use the Hugging Face binary cache
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
+        with:
+          name: huggingface
+        env:
+          USER: runner
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign kernel metadata
+        env:
+          KERNEL: ${{ inputs.kernel }}
+        run: |
+          while IFS= read -r metadata_file; do
+            cosign sign-blob "$metadata_file" --bundle "${metadata_file}.sigstore" --yes
+          done < <(find "$KERNEL/build" -mindepth 2 -maxdepth 2 -name "metadata.json")
+
+      - name: Upload kernel to the Hub
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          KERNEL: ${{ inputs.kernel }}
+          REPO_ID: ${{ needs.target.outputs.repo-id }}
+          BRANCH: ${{ needs.target.outputs.branch }}
+          ALSO_MAIN: ${{ needs.target.outputs.also-main }}
+        run: |
+          cd "$KERNEL"
+          nix run -L github:huggingface/kernels#kernel-builder -- upload \
+            --repo-type kernel --repo-id "$REPO_ID" --branch "$BRANCH" --private \
+            --output-json "$RUNNER_TEMP/upload.json"
+          # Version-1 kernels without an explicit branch also go to main.
+          if [ "$ALSO_MAIN" = "true" ]; then
+            nix run -L github:huggingface/kernels#kernel-builder -- upload \
+              --repo-type kernel --repo-id "$REPO_ID" --branch main --private \
+              --output-json "$RUNNER_TEMP/upload-main.json"
+          fi
+
+      - name: Upload Hub upload summary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hub-upload-${{ inputs.kernel }}
+          path: ${{ runner.temp }}/upload*.json
+          retention-days: 30
+
+  verify:
+    name: Load from the Hub and test
+    needs: [target, upload]
+    runs-on: linux-rck-mi350-1
+    # A ROCm PyTorch image matching a built variant (see the header). An unset
+    # variable fails the pull with this name.
+    container:
+      image: ${{ vars.CI_USER_IMAGE || 'set-the-CI_USER_IMAGE-repository-variable' }}
+      options: --device /dev/kfd --device /dev/dri --group-add video
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # What a user has: the image's PyTorch for ROCm, plus `kernels` (with
+      # huggingface_hub) and pytest. No Nix, no build. Installed into the image's own
+      # Python, where its torch is (a new venv wouldn't see it); the container is
+      # discarded after the job.
+      - name: Add kernels and pytest to the image's PyTorch
+        env:
+          PIP_BREAK_SYSTEM_PACKAGES: "1"
+        run: |
+          python3 -m pip install kernels pytest
+          python3 - <<'EOF'
+          import sys, torch
+          print("torch", torch.__version__, "hip", torch.version.hip)
+          if not torch.version.hip:
+              sys.exit("torch has no ROCm: is CI_USER_IMAGE a ROCm PyTorch image?")
+          EOF
+
+      # The only step with a token: read-only, and nothing from the kernel is imported.
+      # Repositories are private, so an anonymous download would be refused.
+      - name: Download the kernel from the Hub (read-only token)
+        env:
+          HF_TOKEN: ${{ secrets.HF_READ_TOKEN }}
+          HF_HOME: ${{ runner.temp }}/hf-home
+          REPO_ID: ${{ needs.target.outputs.repo-id }}
+          BRANCH: ${{ needs.target.outputs.branch }}
+          KERNELS_CACHE: ${{ runner.temp }}/kernels-cache
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "::error::Set the HF_READ_TOKEN secret (a read-only Hugging Face token for the organisation)"
+            exit 1
+          fi
+          python3 scripts/ci_download.py \
+            --repo-id "$REPO_ID" --revision "$BRANCH" --json "$RUNNER_TEMP/download.json"
+
+      - name: get_kernel() from the download, then the kernels_ci tests (no token)
+        env:
+          REPO_ID: ${{ needs.target.outputs.repo-id }}
+          SOURCE_REPO_ID: ${{ needs.target.outputs.source-repo-id }}
+          LOAD_ARGS: ${{ needs.target.outputs.load-args }}
+          CONFIG_DIR: ${{ needs.target.outputs.config-dir }}
+          TRUST_REMOTE_CODE: ${{ inputs.trust_remote_code }}
+          KERNELS_CACHE: ${{ runner.temp }}/kernels-cache
+          HF_HOME: ${{ runner.temp }}/hf-home
+          HF_HUB_OFFLINE: "1"
+        run: |
+          read -ra load <<< "$LOAD_ARGS"
+          args=(--repo-id "$REPO_ID" "${load[@]}" --json "$RUNNER_TEMP/verify.json")
+          if [ "$TRUST_REMOTE_CODE" = "true" ]; then
+            args+=(--trust-remote-code)
+          fi
+          if [ -d "$CONFIG_DIR/tests" ]; then
+            args+=(--tests "$PWD/$CONFIG_DIR/tests" --tests-repo-id "$SOURCE_REPO_ID")
+          fi
+          cd "$CONFIG_DIR"
+          python3 "$GITHUB_WORKSPACE/scripts/ci_verify_load.py" "${args[@]}"
+
+      - name: Write job summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/verify.json" ]; then
+            python3 - "$RUNNER_TEMP/verify.json" >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          import json, sys
+          r = json.load(open(sys.argv[1]))
+          print(f"### get_kernel(\"{r['repo_id']}\") from the Hub: {'passed' if r['ok'] else 'FAILED'}\n")
+          for k in ("variant", "commit", "device", "torch", "hip", "kernels", "tests_exit", "error"):
+              if r.get(k) is not None:
+                  print(f"- **{k}**: `{r[k]}`")
+          EOF
+          fi
+
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verify-${{ inputs.kernel }}
+          path: |
+            ${{ runner.temp }}/download.json
+            ${{ runner.temp }}/verify.json
+          if-no-files-found: ignore
+          retention-days: 30

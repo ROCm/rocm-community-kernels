@@ -1,0 +1,174 @@
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import kernel_ci  # noqa: E402
+from check_wrapping import KernelInfo  # noqa: E402
+
+
+def kernel(archs, expect=None, results=None):
+    info = KernelInfo("k", "/k", "/k", "org/k", 1, "torch", ["rocm"], "k", archs)
+    kr = kernel_ci.KernelRun(
+        {"path": "k", "expect": expect or {}}, Path("/k"), Path("/out"), info
+    )
+    kr.results = results or {}
+    return kr
+
+
+def ctx(gpu_archs, dry_run=False):
+    return SimpleNamespace(gpu_archs=gpu_archs, dry_run=dry_run)
+
+
+def test_arch_gating():
+    assert kernel_ci.arch_mismatch(ctx(["gfx950"]), kernel(["gfx1201"])) is not None
+    assert (
+        kernel_ci.arch_mismatch(ctx(["gfx950"]), kernel(["gfx942", "gfx950"])) is None
+    )
+    # no archs: may load anywhere
+    assert kernel_ci.arch_mismatch(ctx(["gfx950"]), kernel([])) is None
+    # GPU unknown: try
+    assert kernel_ci.arch_mismatch(ctx([]), kernel(["gfx1201"])) is None
+    assert (
+        kernel_ci.arch_mismatch(ctx(["gfx950"], dry_run=True), kernel(["gfx1201"]))
+        is None
+    )
+
+
+def test_fail_on_skip(tmp_path, monkeypatch):
+    (tmp_path / "k").mkdir()
+
+    def validate(ctx, kr):
+        kr.info = kernel([]).info
+        return kernel_ci.StageResult("pass")
+
+    monkeypatch.setitem(kernel_ci.STAGE_FUNCS, "validate", validate)
+    monkeypatch.setitem(
+        kernel_ci.STAGE_FUNCS,
+        "test",
+        lambda ctx, kr: kernel_ci.StageResult("skip", message="no GPU"),
+    )
+    base = ["run", "--kernels-root", str(tmp_path), "--kernel", "k"]
+    base += ["--stages", "validate,test", "--out", str(tmp_path / "out")]
+    assert kernel_ci.main([*base, "--run-id", "lenient"]) == 0
+    assert kernel_ci.main([*base, "--run-id", "strict", "--fail-on-skip"]) == 1
+    summary = (tmp_path / "out" / "strict" / "summary.md").read_text()
+    assert "skipped, not allowed here: no GPU" in summary
+
+
+def test_concurrency_args(tmp_path, monkeypatch):
+    limits = tmp_path / "build-concurrency.json"
+    limits.write_text('{"big": {"rocm": {"max-jobs": 1, "cores": 8}}}')
+    monkeypatch.setattr(kernel_ci, "BUILD_CONCURRENCY", limits)
+    assert kernel_ci.concurrency_args("big", "rocm") == [
+        "--max-jobs",
+        "1",
+        "--cores",
+        "8",
+    ]
+    assert kernel_ci.concurrency_args("small", "rocm") == []
+
+
+def test_hf_cache_detection():
+    key = "huggingface.cachix.org-1:<public key>"
+    nixos = ["https://cache.nixos.org/"]
+
+    def config(substituters, keys):
+        return {
+            "substituters": {"value": substituters},
+            "trusted-public-keys": {"value": keys},
+        }
+
+    assert kernel_ci.has_hf_cache(
+        config([*nixos, "https://huggingface.cachix.org"], [key])
+    )
+    assert not kernel_ci.has_hf_cache(config(nixos, []))
+    # the key alone doesn't make Nix fetch from it, nor the URL without a trusted key
+    assert not kernel_ci.has_hf_cache(config(nixos, [key]))
+    assert not kernel_ci.has_hf_cache(
+        config(["https://huggingface.cachix.org"], ["cache.nixos.org-1:x"])
+    )
+    assert not kernel_ci.has_hf_cache({})
+
+
+def test_missing_hf_cache_fails_before_building(tmp_path):
+    def ctx(hf_cache, **args):
+        return SimpleNamespace(
+            dry_run=False,
+            env={"nix": True, "hf_cache": hf_cache},
+            args=SimpleNamespace(ci=True, no_hf_cache_check=False, **args),
+        )
+
+    res = kernel_ci.stage_build(ctx(False), kernel([]))
+    assert res.status == "fail" and "cachix -- use huggingface" in res.message
+    # Nix couldn't say, or the user opted out: don't block
+    assert kernel_ci.cache_check(ctx(None)) is None
+    opted_out = ctx(False)
+    opted_out.args.no_hf_cache_check = True
+    assert kernel_ci.cache_check(opted_out) is None
+
+
+def test_source_builds_from_nix_dry_run():
+    out = """\
+these 3 derivations will be built:
+  /nix/store/0a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p-rocm-llvm-7.14.0.drv
+  /nix/store/1a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p-python3.13-torch-2.10.0.drv
+  /nix/store/2a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p-sage-attention-torch-ext.drv
+these 2 paths will be fetched (1.20 GiB download, 6.00 GiB unpacked):
+  /nix/store/3a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p-rocm-clr-7.1.1
+  /nix/store/4a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p-clang-19.1.0
+"""
+    names = kernel_ci.source_builds(out)
+    assert names == [
+        "rocm-llvm-7.14.0",
+        "python3.13-torch-2.10.0",
+        "sage-attention-torch-ext",
+    ]
+    # fetched paths and the kernel's own derivation aren't toolchain builds
+    assert [n for n in names if kernel_ci.TOOLCHAIN.search(n)] == names[:2]
+    assert (
+        kernel_ci.source_builds("this path will be fetched:\n  /nix/store/x-a\n") == []
+    )
+
+
+def test_ci_test_uses_the_newest_torch_for_the_rocm_version():
+    variants = [
+        "torch29-rocm71-x86_64-linux",
+        "torch210-rocm70-x86_64-linux",
+        "torch210-rocm71-x86_64-linux",
+        "torch213-rocm71-x86_64-linux",
+        "torch214-rocm714-x86_64-linux",
+        "torch215-rocm714-x86_64-linux",
+        "torch215-rocm100-x86_64-linux",
+    ]
+    assert kernel_ci.pick_ci_test(variants, "7.1") == "torch213-rocm71-x86_64-linux"
+    # rocm71 must not match rocm714
+    assert kernel_ci.pick_ci_test(variants, "7.14") == "torch215-rocm714-x86_64-linux"
+    assert kernel_ci.pick_ci_test(variants, "7.2") is None
+    assert kernel_ci.pick_ci_test([], "7.1") is None
+
+
+def test_expectations():
+    R = kernel_ci.StageResult
+    ok = kernel([], {"validate": "fail"}, {"validate": R("fail"), "build": R("pass")})
+    assert kernel_ci.unexpected(ok) == []
+    wrong = kernel([], {"validate": "fail"}, {"validate": R("pass")})
+    assert kernel_ci.unexpected(wrong) == ["validate: pass, expected fail"]
+    plain = kernel([], {}, {"build": R("fail"), "test": R("skip")})
+    assert kernel_ci.unexpected(plain) == ["build: fail"]
+
+
+def test_commands_never_get_a_token(monkeypatch):
+    """Pull request code runs on the GPU runner: no command may see a Hub token."""
+    monkeypatch.setenv("HF_TOKEN", "secret")
+    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "secret")
+    monkeypatch.setenv("LOCAL_KERNELS", "x=y")
+    env = kernel_ci.env_for(True, KERNELS_CACHE="/tmp/hub")
+    assert (
+        "HF_TOKEN" not in env
+        and "HUGGING_FACE_HUB_TOKEN" not in env
+        and "LOCAL_KERNELS" not in env
+    )
+    assert env["HF_HUB_OFFLINE"] == "1" and env["KERNELS_CACHE"] == "/tmp/hub"
+    assert "HF_HUB_OFFLINE" not in kernel_ci.env_for(False)

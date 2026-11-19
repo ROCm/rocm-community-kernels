@@ -1,0 +1,138 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+#
+# Pull request CI for kernels. For each kernel directory the pull request changes:
+#
+#   validate     maintainers registry, how the kernel is wrapped for
+#                kernel-builder, the community rules (ci/community.toml) and
+#                kernel-builder check-config. GitHub-hosted runner.
+#   build/test   one representative ROCm variant, check-abi, then `pytest -m
+#                kernels_ci` through `get_kernel()` on an MI350 (rocm-build-test.yml).
+#
+# "Kernel CI result" is the check branch protection requires: it fails if any job
+# failed or was cancelled, and passes when the pull request changes no kernel.
+#
+# Every pull request runs these builds, gated by GitHub's approval of workflows
+# from outside contributors. The trigger is `pull_request`, never `pull_request_target`,
+# so fork code gets a read-only token and no secrets.
+
+name: Kernel CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      kernels:
+        description: "Comma-separated kernel directories, or 'all'"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Find changed kernels
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      kernels: ${{ steps.changed.outputs.kernels }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: List changed kernels
+        id: changed
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          KERNELS: ${{ inputs.kernels }}
+        run: |
+          if [ -n "$KERNELS" ]; then
+            python3 scripts/changed_kernels.py --kernels "$KERNELS" --github-output
+          else
+            python3 scripts/changed_kernels.py --base "$BASE" --head "$HEAD" --github-output
+          fi
+
+  validate:
+    name: Validate
+    needs: changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the maintainers registry
+        run: python3 scripts/kernel_maintainers.py check
+
+      - name: Install Nix
+        if: needs.changes.outputs.kernels != '[]'
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Use the Hugging Face binary cache
+        if: needs.changes.outputs.kernels != '[]'
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
+        with:
+          name: huggingface
+        env:
+          USER: runner
+
+      - name: Check how each kernel is wrapped
+        if: needs.changes.outputs.kernels != '[]'
+        env:
+          KERNELS: ${{ needs.changes.outputs.kernels }}
+        run: |
+          args=()
+          for k in $(python3 -c 'import json, os; print(" ".join(json.loads(os.environ["KERNELS"])))'); do
+            args+=(--kernel "$k")
+          done
+          python3 scripts/kernel_ci.py run "${args[@]}" --stages validate \
+            --out "$RUNNER_TEMP/ci-out" --run-id validate
+
+      - name: Write job summary
+        if: always() && needs.changes.outputs.kernels != '[]'
+        run: |
+          if [ -f "$RUNNER_TEMP/ci-out/validate/summary.md" ]; then
+            cat "$RUNNER_TEMP/ci-out/validate/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  build-test:
+    name: ROCm
+    needs: [changes, validate]
+    if: needs.changes.outputs.kernels != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel: ${{ fromJSON(needs.changes.outputs.kernels) }}
+    uses: ./.github/workflows/rocm-build-test.yml
+    with:
+      kernel: ${{ matrix.kernel }}
+      variants: ci
+
+  result:
+    name: Kernel CI result
+    if: always()
+    needs: [changes, validate, build-test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check every job passed
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "$RESULTS"
+          if echo "$RESULTS" | grep -Eq '"(failure|cancelled)"'; then
+            echo "::error::Kernel CI failed; see the jobs above"
+            exit 1
+          fi
