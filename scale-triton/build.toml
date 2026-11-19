@@ -1,0 +1,13 @@
+[general]
+name = "scale-triton"
+version = 1
+edition = 6
+license = "MIT"
+backends = ["rocm"]
+
+[general.hub]
+repo-id = "rocm-community/scale-triton"
+
+[torch-noarch]
+
+[kernel]
