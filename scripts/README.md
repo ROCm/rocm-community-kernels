@@ -71,7 +71,7 @@ any digest or signature warnings, then optionally runs the kernel's `kernels_ci`
 (`--tests`), a smoke expression (`--smoke`) or its benchmarks (`--benchmark`). Writes a
 JSON report; exits 1 on any failure.
 
-- `--tests-repo-id`: the publish workflow uploads to a test organisation, but the
+- `--tests-repo-id`: the publish workflow can upload to another organisation, but the
   kernel's tests load `build.toml`'s repo id. This maps that id, through
   `LOCAL_KERNELS`, to the build just downloaded, so the tests run against the published
   build.

@@ -89,8 +89,9 @@ These are configured in [ci/community.toml](ci/community.toml) and described in
 [docs/COMMUNITY_POLICY.md](docs/COMMUNITY_POLICY.md).
 
 - **Hub repository.** `repo-id` is `rocm-community/<kernel directory name>`. The
-  organisation name is proposed, not yet agreed with Hugging Face; the POC publishes to
-  a test organisation instead, without changing `build.toml`.
+  organisation name is proposed, not yet agreed with Hugging Face. The publish workflow
+  can publish to another organisation (its `hub_org` input) without changing
+  `build.toml`.
 - **Reserved names.** No `aiter-` prefix, and no `amd` or `amd-aiter` organisation.
   Those belong to AMD's own kernels.
 - **No AITER code.** Don't vendor AITER sources, add AITER as a submodule, or submit

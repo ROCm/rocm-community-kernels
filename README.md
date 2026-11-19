@@ -13,9 +13,9 @@ Community GPU kernels for ROCm, built and tested on AMD GPUs and published to th
 
 ## Status
 
-Proof of concept. The repository, its review rules and its CI are being set up and
-checked on MI350 (gfx950); see [docs/poc/goal1.md](docs/poc/goal1.md). No kernels have
-been published from here yet, and the Hub organisation is not final.
+The repository, its review rules and its CI are being set up and checked on MI350
+(gfx950). No kernels have been published from here yet, and the Hub organisation is not
+final.
 
 ## Using a kernel
 
@@ -49,7 +49,7 @@ repository.
 └── tests/                tests that load the kernel with get_kernel(); a kernels_ci subset runs in CI
 AGENTS.md                 the rules every kernel follows (imports, op namespaces, tests, versions)
 CONTRIBUTING.md           how to add or change a kernel
-docs/                     community policy, card template, POC runbook
+docs/                     community policy, card template
 ci/                       the community rules CI enforces (community.toml)
 scripts/                  the checks CI runs (kernel_ci.py runs them locally too)
 .github/                  workflows, CODEOWNERS, maintainers registry, branch ruleset

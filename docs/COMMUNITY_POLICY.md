@@ -5,9 +5,8 @@ enforces the parts it can (see [AGENTS.md](../AGENTS.md#community-rules-this-rep
 AMD repository maintainers check the rest in review.
 
 > [!NOTE]
-> Draft for the proof of concept. The Hub organisation (`rocm-community`), the
-> community steward role and the response times below are proposals that still need
-> to be agreed.
+> Draft. The Hub organisation (`rocm-community`), the community steward role and the
+> response times below are proposals that still need to be agreed.
 
 ## Roles
 

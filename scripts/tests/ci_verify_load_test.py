@@ -59,7 +59,7 @@ def make_build(root: Path) -> Path:
 
 
 def test_kernel_tests_follow_a_publish_to_another_org(tmp_path):
-    """publish.yml uploads to a test organisation, while the tests load build.toml's id."""
+    """publish.yml can upload to another org; the tests load build.toml's repo id."""
     published = make_build(tmp_path / "test-org-demo")
     tests = tmp_path / "kernel" / "tests"
     tests.mkdir(parents=True)

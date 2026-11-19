@@ -3,8 +3,8 @@
 
 # The Hugging Face organisation every community kernel publishes to: build.toml's
 # repo-id must be "<hub-org>/<kernel directory name>". Proposed, not yet agreed with
-# Hugging Face. During the POC the publish workflow writes to a test organisation
-# instead (its hub_org input replaces the organisation, never the name).
+# Hugging Face. The publish workflow can write to another organisation instead (its
+# hub_org input replaces the organisation, never the name).
 hub-org = "rocm-community"
 
 # Names and organisations reserved for AMD's own packages, which are published from
@@ -13,7 +13,7 @@ reserved-prefixes = ["aiter"]
 reserved-orgs = ["amd", "amd-aiter"]
 
 # GPUs the CI tests on. A kernel's rocm-archs must include at least one of them, or
-# its GPU tests can't run. The POC runner is an MI350.
+# its GPU tests can't run. The CI runners are MI350s.
 ci-archs = ["gfx950"]
 
 # Every kernel's CARD.md (or README.md) must carry this notice; see
