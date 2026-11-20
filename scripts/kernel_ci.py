@@ -42,7 +42,9 @@ sys.path.insert(0, str(SCRIPTS))
 import check_wrapping  # noqa: E402
 
 STAGES = ["validate", "build", "test"]
-KERNEL_BUILDER = ["nix", "run", "-L", "github:huggingface/kernels#kernel-builder", "--"]
+# The kernel-builder CLI pinned by the repository's flake.lock, not whatever is on the
+# kernels default branch. (Builds use each kernel's own flake.lock.)
+KERNEL_BUILDER = ["nix", "run", "-L", f"{REPO_ROOT}#kernel-builder", "--"]
 SECRETS = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HF_HUB_TOKEN")
 BUILD_CONCURRENCY = REPO_ROOT / "build-concurrency.json"
 # Hugging Face's binary cache holds the PyTorch x ROCm toolchains kernel-builder uses;

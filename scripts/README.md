@@ -10,14 +10,18 @@ The scripts the CI (the GitHub workflows) runs. Contributors can run them locall
 | `changed_kernels.py`    | Lists the kernels a pull request changes                                           | `kernel-ci.yml`                                      |
 | `kernel_maintainers.py` | Checks the kernel maintainers registry                                             | `kernel-ci.yml`                                      |
 | `publish_target.py`     | Works out where a publish uploads to, and how to load it back                      | `publish.yml`                                        |
-| `tests/`                | Unit tests for the scripts above                                                   | `ci-scripts.yml`                                     |
+| `publish_gate.py`       | Checks the publish approval gate (environment, reviewers, token) is in place       | `publish.yml` (target job)                           |
+| `ci_download.py`        | Downloads a published kernel without loading it                                    | `publish.yml` (download job)                         |
+| `tests/`                | Unit tests for the scripts above, and checks on the workflows                      | `kernel-ci.yml`, on every pull request               |
 
 ## `kernel_ci.py`
 
 Runs three stages per kernel:
 
 1. **validate**: `check_wrapping.py` (with the community rules unless
-   `--hf-rules-only`), then `kernel-builder check-config`.
+   `--hf-rules-only`), then `kernel-builder check-config`. kernel-builder's CLI comes
+   from the repository's `flake.lock` (`nix run .#kernel-builder`); builds use each
+   kernel's own `flake.lock`.
 1. **build**: `nix build .#backendCi.rocm` (one representative variant, `--ci`) or
    `.#backendBundle.rocm` (every variant), then `kernel-builder check-abi` for compiled
    kernels. Memory-heavy kernels get Nix job limits from `build-concurrency.json`.
@@ -79,6 +83,13 @@ JSON report; exits 1 on any failure.
 - `--benchmark`: times the `Benchmark` classes in the kernel's
   `benchmarks/benchmark.py` and records the results in the report.
 
+## `publish_gate.py`
+
+Runs first in the publish workflow. Fails unless the `hf-rocm-community` environment
+exists with required reviewers and a branch limit, and `HF_TOKEN` is a secret of that
+environment only (a repository or organisation secret would let the upload run without
+approval). See Repository setup in [`ci/README.md`](../ci/README.md).
+
 ## `changed_kernels.py`
 
 Prints the changed kernels as JSON (with `--github-output`, also for the workflow). A
@@ -117,12 +128,12 @@ python3 scripts/publish_target.py <kernel> --hub-org <test-org>
 
 No GPU, Nix or network needed.
 
-| File                     | Covers                                                                                                     |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| `check_wrapping_test.py` | Each wrapping and community rule, on small generated kernels                                               |
-| `kernel_ci_test.py`      | GPU-architecture skipping, `--fail-on-skip`, build concurrency, expected results, no Hub token in commands |
-| `repo_tooling_test.py`   | `changed_kernels.py` on a real git history, the maintainers check, `publish_target.py`                     |
-| `ci_verify_load_test.py` | `--tests-repo-id` with the real `kernels` loader (skipped without PyTorch and `kernels`)                   |
+| File                     | Covers                                                                                                                                                                                                               |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `check_wrapping_test.py` | Each wrapping and community rule, on small generated kernels                                                                                                                                                         |
+| `kernel_ci_test.py`      | GPU-architecture skipping, `--fail-on-skip`, build concurrency, expected results, no Hub token in commands                                                                                                           |
+| `repo_tooling_test.py`   | `changed_kernels.py` on a real git history, the maintainers check, `publish_target.py`, `publish_gate.py`; the workflows: uploads are private, GPU jobs run in a container with no secrets, kernel-builder is pinned |
+| `ci_verify_load_test.py` | `--tests-repo-id` with the real `kernels` loader (skipped without PyTorch and `kernels`)                                                                                                                             |
 
 ```bash
 python3 -m pytest scripts/tests

@@ -4,7 +4,9 @@
   inputs = {
     flake-utils.url = "github:numtide/flake-utils";
     nixpkgs.follows = "kernels/nixpkgs";
-    kernels.url = "github:huggingface/kernels";
+    # The kernel-builder the CI runs (check-config, check-abi, and the upload with the
+    # Hub write token), pinned by flake.lock. The same tag as the kernel template.
+    kernels.url = "github:huggingface/kernels/torch-2.15.0-final";
   };
 
   outputs =
@@ -37,6 +39,8 @@
           };
 
         formatter = pkgs.nixfmt-tree;
+
+        packages.kernel-builder = kernels.packages.${system}.kernel-builder;
       }
     );
 }

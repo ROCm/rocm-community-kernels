@@ -1,7 +1,7 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: MIT
 #
-# CI_IMAGE: the image the gfx950 "Build and GPU test" job runs in
+# The CI image: what the gfx950 "Build and GPU test" job runs in
 # (.github/workflows/rocm-build-test.yml). Slim on purpose: Python, git and Nix
 # using Hugging Face's binary cache. No ROCm and no PyTorch: Nix fetches the exact
 # ones each kernel variant is built and tested with.
@@ -38,3 +38,7 @@ ENV PATH=/nix/var/nix/profiles/default/bin:$PATH \
 RUN nix --version \
     && nix config show | grep -q 'huggingface.cachix.org' \
     && python --version
+
+# The commit the image was built from (ci-image.yml passes it); the GPU job prints it.
+ARG REVISION=unknown
+ENV CI_IMAGE_REVISION=$REVISION

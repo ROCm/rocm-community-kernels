@@ -4,9 +4,11 @@
 # Builds the CI image (ci/docker/Dockerfile) and pushes it to the GitHub Container
 # Registry as ghcr.io/<owner>/rocm-community-kernels-ci, logged in with this job's
 # own temporary GITHUB_TOKEN: there is no registry key to create or store. Pull
-# requests only build it. The job summary gives the digest to put in the CI_IMAGE
-# repository variable. The package must be public so the MI350 runners can pull it
-# without credentials (it contains nothing private).
+# requests only build it. Every push is tagged sha-<commit>; only main also pushes
+# `latest`, the tag the GPU jobs run (rocm-build-test.yml), so they only ever use an
+# image built from reviewed code. A push to another branch gives an image to try on
+# the MI350 before merging, by its sha- tag. The package must be public so the MI350
+# runners can pull it without credentials (it contains nothing private).
 
 name: CI image
 
@@ -45,8 +47,9 @@ jobs:
         run: |
           image="ghcr.io/${OWNER,,}/rocm-community-kernels-ci"
           echo "IMAGE=$image" >> "$GITHUB_ENV"
-          docker build ci/docker -t "$image:sha-$SHA" \
-            --label "org.opencontainers.image.source=https://github.com/$REPO"
+          docker build ci/docker -t "$image:sha-$SHA" --build-arg "REVISION=$SHA" \
+            --label "org.opencontainers.image.source=https://github.com/$REPO" \
+            --label "org.opencontainers.image.revision=$SHA"
 
       - name: Push
         if: github.event_name != 'pull_request'
@@ -58,15 +61,17 @@ jobs:
         run: |
           echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
           docker push "$IMAGE:sha-$SHA"
+          tags="sha-$SHA"
           if [ "$REF" = refs/heads/main ]; then
             docker tag "$IMAGE:sha-$SHA" "$IMAGE:latest"
             docker push "$IMAGE:latest"
+            tags="$tags, latest (what the GPU jobs run)"
           fi
           digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:sha-$SHA")
           docker logout ghcr.io
           {
             echo "### CI image pushed"
-            echo "Set the CI_IMAGE repository variable to:"
+            echo "Tags: $tags"
             echo '```'
             echo "$digest"
             echo '```'

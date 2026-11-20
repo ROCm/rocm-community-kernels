@@ -1,4 +1,5 @@
-"""Tests for the helpers the GitHub workflows call: changed kernels, maintainers, publish target."""
+"""Tests for the helpers the GitHub workflows call (changed kernels, maintainers,
+publish target and gate), and for the workflows themselves."""
 
 import json
 import re
@@ -12,7 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import changed_kernels  # noqa: E402
 import kernel_maintainers  # noqa: E402
+import publish_gate  # noqa: E402
 import publish_target  # noqa: E402
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 
 
 def add_kernel(root: Path, name: str, version: int = 1, org: str = "rocm-community"):
@@ -123,11 +128,77 @@ def test_publish_target_rejects(tmp_path, kernel, org, branch):
         publish_target.target(tmp_path, kernel, org, branch)
 
 
+PROTECTED = {
+    "name": "hf-rocm-community",
+    "protection_rules": [
+        {"type": "required_reviewers", "reviewers": [{"type": "Team"}]},
+        {"type": "branch_policy"},
+    ],
+    "deployment_branch_policy": {
+        "protected_branches": False,
+        "custom_branch_policies": True,
+    },
+}
+
+
+def test_publish_gate_ok():
+    assert publish_gate.problems(PROTECTED, write_token_visible=False) == []
+
+
+@pytest.mark.parametrize(
+    "environment, visible, expected",
+    [
+        (None, False, "doesn't exist"),
+        (PROTECTED, True, "HF_TOKEN is visible"),
+        ({**PROTECTED, "protection_rules": []}, False, "no required reviewers"),
+        (
+            {
+                **PROTECTED,
+                "protection_rules": [{"type": "required_reviewers", "reviewers": []}],
+            },
+            False,
+            "no required reviewers",
+        ),
+        ({**PROTECTED, "deployment_branch_policy": None}, False, "any branch"),
+    ],
+)
+def test_publish_gate_problems(environment, visible, expected):
+    found = publish_gate.problems(environment, write_token_visible=visible)
+    assert len(found) == 1 and expected in found[0], found
+
+
+def test_publish_gate_cli(tmp_path, capsys):
+    env_json = tmp_path / "environment.json"
+    args = ["--environment-json", str(env_json), "--write-token-visible", "false"]
+    assert publish_gate.main(args) == 1  # missing file: no environment
+    env_json.write_text(json.dumps(PROTECTED))
+    assert publish_gate.main(args) == 0
+    assert publish_gate.main(args[:3] + ["true"]) == 1
+
+
+def test_publish_gate_checks_the_upload_environment():
+    """The gate reads the environment the upload job waits in."""
+    text = (WORKFLOWS / "publish.yml").read_text()
+    upload = job_blocks(text)["upload"]
+    name = re.search(r"^    environment:\n      name: (\S+)$", upload, re.M)
+    assert name and name.group(1) == publish_gate.ENVIRONMENT
+    assert f"/environments/{publish_gate.ENVIRONMENT}" in job_blocks(text)["target"]
+
+
+def test_kernel_builder_is_pinned():
+    """The CI runs kernel-builder from the repository's flake.lock, never from the
+    kernels default branch (the upload runs it with the Hub write token)."""
+    files = sorted(WORKFLOWS.glob("*.yml")) + sorted(
+        (REPO_ROOT / "scripts").glob("*.py")
+    )
+    for f in files:
+        assert "github:huggingface/kernels#" not in f.read_text(), f.name
+
+
 def test_every_workflow_upload_is_private():
     """kernel-builder creates public repositories unless told otherwise."""
-    workflows = Path(__file__).resolve().parents[2] / ".github" / "workflows"
     uploads = []
-    for wf in sorted(workflows.glob("*.yml")):
+    for wf in sorted(WORKFLOWS.glob("*.yml")):
         # Join shell continuation lines, so each command is one line.
         text = re.sub(r"\\\n\s*", " ", wf.read_text())
         uploads += [
@@ -148,19 +219,23 @@ def job_blocks(text: str) -> dict[str, str]:
 
 
 def test_gpu_jobs_run_in_the_ci_image():
-    """Jobs on the MI350 runners run in a CI image, with the GPU devices passed in."""
-    workflows = Path(__file__).resolve().parents[2] / ".github" / "workflows"
+    """Jobs on the MI350 runners run in a CI image, with the GPU devices passed in,
+    and get no secrets: pull request code runs on those runners."""
     gpu_jobs = 0
-    for wf in sorted(workflows.glob("*.yml")):
+    for wf in sorted(WORKFLOWS.glob("*.yml")):
         for job, block in job_blocks(wf.read_text()).items():
             if not re.search(r"^    runs-on: .*\blinux-rck-mi350-\d", block, re.M):
                 continue
             gpu_jobs += 1
             where = f"{wf.name}: {job}"
+            assert "secrets." not in block, f"{where}: uses a secret"
             has_container = re.search(r"^    container:\n", block, re.M)
             assert has_container, f"{where}: no container"
-            image = r"^      image: \$\{\{ vars\.(CI_IMAGE|CI_USER_IMAGE) "
-            assert re.search(image, block, re.M), f"{where}: image not from a variable"
+            image = (
+                r"^      image: (ghcr\.io/rocm/rocm-community-kernels-ci:latest"
+                r"|\$\{\{ vars\.CI_USER_IMAGE )"
+            )
+            assert re.search(image, block, re.M), f"{where}: not a known image"
             options = re.search(r"^      options: (.*)$", block, re.M)
             assert options, f"{where}: no container options"
             for device in ("/dev/kfd", "/dev/dri"):

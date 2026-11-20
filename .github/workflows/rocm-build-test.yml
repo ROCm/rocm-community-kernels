@@ -13,9 +13,10 @@
 # the kernels_ci tests use one (linux-rck-mi350-2/-4/-8 have more). A runner needs
 # Docker able to pull the CI image (for a Kubernetes runner set, a container mode
 # that allows `container:`) and a ROCm driver exposing /dev/kfd and /dev/dri. The
-# job runs in the CI image, named by the CI_IMAGE repository variable (pin it by
-# digest), with those two devices passed in. ci/docker/Dockerfile builds it
-# (ci-image.yml pushes it to the GitHub Container Registry). The image provides:
+# job runs in the CI image, with those two devices passed in: ci/docker/Dockerfile,
+# which ci-image.yml builds and pushes to the GitHub Container Registry. The job uses
+# its `latest` tag, which only main pushes, so the image is always one built from
+# reviewed code; the job prints the commit it was built from. The image provides:
 #
 #   - Python 3.12 as `python` and `python3`; git and curl;
 #   - Nix on PATH with flakes, using Hugging Face's binary cache (kernel_ci.py
@@ -61,9 +62,9 @@ jobs:
   build-test:
     name: Build and GPU test
     runs-on: linux-rck-mi350-1
-    # The CI image (see the header). An unset variable fails the pull with this name.
+    # The CI image (see the header).
     container:
-      image: ${{ vars.CI_IMAGE || 'set-the-CI_IMAGE-repository-variable' }}
+      image: ghcr.io/rocm/rocm-community-kernels-ci:latest # zizmor: ignore[unpinned-images] only main pushes latest
       options: --device /dev/kfd --device /dev/dri --group-add video
     # Compiled kernels with every variant can take hours.
     timeout-minutes: 720
@@ -92,6 +93,7 @@ jobs:
 
       - name: Show toolchain and GPU
         run: |
+          echo "CI image built from commit ${CI_IMAGE_REVISION:-unknown}"
           python --version
           nix --version
           nix config show | grep -E '^(extra-)?(substituters|trusted-public-keys) ' || true
