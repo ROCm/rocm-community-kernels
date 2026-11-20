@@ -46,3 +46,14 @@ npm-debug.log*
 # Security
 secrets.*
 credentials.*
+
+# Local CI output (scripts/kernel_ci.py)
+ci-out/
+
+# Nix build outputs (`nix build`) and direnv
+result
+result-*
+.direnv
+
+# Never commit compiled kernel libraries
+*.so
