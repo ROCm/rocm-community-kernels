@@ -9,10 +9,11 @@
 # with --fail-on-skip so that a missing GPU, missing Nix or a GPU the kernel
 # doesn't target fails the gate instead of skipping it.
 #
-# Runner: linux-rck-mi350-1, the project's MI350 (gfx950) runners with one GPU;
-# the kernels_ci tests use one (linux-rck-mi350-2/-4/-8 have more). A runner needs
-# Docker able to pull the CI image (for a Kubernetes runner set, a container mode
-# that allows `container:`) and a ROCm driver exposing /dev/kfd and /dev/dri. The
+# Runner: the one the GPU_TEST_RUNNER variable names (repository or organisation
+# level; see Repository setup in ci/README.md), an MI350 (gfx950) runner with one
+# GPU, which is all the kernels_ci tests use. A runner needs Docker able to pull the
+# CI image (for a Kubernetes runner set, a container mode that allows `container:`)
+# and a ROCm driver exposing /dev/kfd and /dev/dri. The
 # job runs in the CI image, with those two devices passed in: ci/docker/Dockerfile,
 # which ci-image.yml builds and pushes to the GitHub Container Registry. The job uses
 # its `latest` tag, which only main pushes, so the image is always one built from
@@ -61,7 +62,8 @@ permissions:
 jobs:
   build-test:
     name: Build and GPU test
-    runs-on: linux-rck-mi350-1
+    # The GPU test runner (see the header). Callers check the variable is set first.
+    runs-on: ${{ vars.GPU_TEST_RUNNER }}
     # The CI image (see the header).
     container:
       image: ghcr.io/rocm/rocm-community-kernels-ci:latest # zizmor: ignore[unpinned-images] only main pushes latest

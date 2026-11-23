@@ -24,6 +24,12 @@ python3 scripts/kernel_ci.py run --kernel <kernel> --ci
 
 What an administrator sets up outside the repository.
 
+First, for both pull requests and publishing: set the `GPU_TEST_RUNNER` variable
+(repository or organisation level) to the label of the GPU test runner, an MI350
+(gfx950) runner with one GPU. The GPU jobs run on it, and the workflows name no runner
+of their own, so moving to another runner needs no change here. Kernel CI's `validate`
+job and the publish workflow fail without it. It's configuration, not a secret.
+
 ### Publishing
 
 In this order, before `HF_TOKEN` exists anywhere and before `publish.yml` reaches
@@ -53,14 +59,15 @@ In this order, before `HF_TOKEN` exists anywhere and before `publish.yml` reache
 - Make the `rocm-community-kernels-ci` package public, so the MI350 runners can pull it
   without credentials.
 
-### MI350 runners
+### GPU test runner
 
-The `linux-rck-mi350-*` runners run pull request code, and publishing builds there
-too. They need to be:
+The runner `GPU_TEST_RUNNER` names runs pull request code, and publishing builds there
+too. It needs to be:
 
 - ephemeral: a fresh runner for every job, so nothing a pull request job leaves
   behind (work directory, Docker image cache) reaches a later job;
 - limited in outbound network access to what the jobs need: GitHub and GHCR, the Nix
   caches (`cache.nixos.org`, `huggingface.cachix.org`) and PyPI.
 
-No job on them gets a secret; `scripts/tests` checks the workflows for that.
+No job on it gets a secret; `scripts/tests` checks the workflows for that, and that no
+workflow names a runner label of its own.

@@ -218,13 +218,27 @@ def job_blocks(text: str) -> dict[str, str]:
     return dict(zip(parts[1::2], parts[2::2]))
 
 
+GPU_RUNNER = "${{ vars.GPU_TEST_RUNNER }}"
+
+
+def test_runners_are_github_hosted_or_the_gpu_variable():
+    """No workflow names an infrastructure runner label: the GPU runner comes from
+    the GPU_TEST_RUNNER variable, everything else runs on GitHub-hosted Ubuntu."""
+    for wf in sorted(WORKFLOWS.glob("*.yml")):
+        for job, block in job_blocks(wf.read_text()).items():
+            for runner in re.findall(r"^    runs-on: (.*)$", block, re.M):
+                assert runner == GPU_RUNNER or re.fullmatch(
+                    r"ubuntu-[0-9.]+", runner
+                ), f"{wf.name}: {job}: runs-on {runner}"
+
+
 def test_gpu_jobs_run_in_the_ci_image():
-    """Jobs on the MI350 runners run in a CI image, with the GPU devices passed in,
-    and get no secrets: pull request code runs on those runners."""
+    """Jobs on the GPU test runner run in a CI image, with the GPU devices passed in,
+    and get no secrets: pull request code runs on that runner."""
     gpu_jobs = 0
     for wf in sorted(WORKFLOWS.glob("*.yml")):
         for job, block in job_blocks(wf.read_text()).items():
-            if not re.search(r"^    runs-on: .*\blinux-rck-mi350-\d", block, re.M):
+            if f"\n    runs-on: {GPU_RUNNER}\n" not in f"\n{block}":
                 continue
             gpu_jobs += 1
             where = f"{wf.name}: {job}"

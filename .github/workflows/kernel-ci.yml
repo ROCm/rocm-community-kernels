@@ -81,6 +81,18 @@ jobs:
         with:
           persist-credentials: false
 
+      # On every pull request, so a missing variable shows before a kernel needs it:
+      # without it the ROCm job would wait for a runner that never comes.
+      - name: Check the GPU test runner is set
+        env:
+          GPU_TEST_RUNNER: ${{ vars.GPU_TEST_RUNNER }}
+        run: |
+          if [ -z "$GPU_TEST_RUNNER" ]; then
+            echo "::error::Set the GPU_TEST_RUNNER variable (the label of the GPU test runner; see Repository setup in ci/README.md)"
+            exit 1
+          fi
+          echo "GPU test runner: $GPU_TEST_RUNNER"
+
       - name: Check the maintainers registry
         run: python3 scripts/kernel_maintainers.py check
 

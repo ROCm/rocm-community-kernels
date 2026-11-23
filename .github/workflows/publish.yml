@@ -114,6 +114,18 @@ jobs:
           python3 scripts/publish_gate.py --environment-json "$env_json" \
             --write-token-visible "$WRITE_TOKEN_VISIBLE"
 
+      # The build and verify jobs run on the runner it names; without it they'd wait
+      # for a runner that never comes.
+      - name: Check the GPU test runner is set
+        env:
+          GPU_TEST_RUNNER: ${{ vars.GPU_TEST_RUNNER }}
+        run: |
+          if [ -z "$GPU_TEST_RUNNER" ]; then
+            echo "::error::Set the GPU_TEST_RUNNER variable (the label of the GPU test runner; see Repository setup in ci/README.md)"
+            exit 1
+          fi
+          echo "GPU test runner: $GPU_TEST_RUNNER"
+
       - name: Resolve the Hub repository and branch
         id: target
         env:
@@ -283,7 +295,8 @@ jobs:
   verify:
     name: Load from the Hub and test
     needs: [target, download]
-    runs-on: linux-rck-mi350-1
+    # The GPU test runner, as in rocm-build-test.yml; target checks the variable is set.
+    runs-on: ${{ vars.GPU_TEST_RUNNER }}
     # A ROCm PyTorch image matching a built variant (see the header). An unset
     # variable fails the pull with this name.
     container:
