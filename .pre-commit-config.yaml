@@ -24,6 +24,8 @@ repos:
   rev: e07e382e3ffaec54080e233ade96a78295881884  # frozen: 0.7.21
   hooks:
   - id: mdformat
+    # Kernel cards are Jinja templates that kernel-builder fills in; mdformat breaks them.
+    exclude: '(^|/)CARD(_TEMPLATE_COMMUNITY)?\.md$'
     additional_dependencies:
     - mdformat-gfm==1.0.0
     - mdformat-black==0.1.1
