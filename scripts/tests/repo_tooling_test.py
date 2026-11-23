@@ -300,7 +300,7 @@ def test_gpu_jobs_run_in_the_ci_image():
             has_container = re.search(r"^    container:\n", block, re.M)
             assert has_container, f"{where}: no container"
             image = (
-                r"^      image: (ghcr\.io/rocm/rocm-community-kernels-ci:latest"
+                r"^      image: (ghcr\.io/rocm/rocm-community-kernels-ci:(latest|sha-[0-9a-f]{40})"
                 r"|\$\{\{ vars\.CI_USER_IMAGE )"
             )
             assert re.search(image, block, re.M), f"{where}: not a known image"

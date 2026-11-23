@@ -74,7 +74,9 @@ jobs:
     runs-on: ${{ inputs.runner }}
     # The CI image (see the header).
     container:
-      image: ghcr.io/rocm/rocm-community-kernels-ci:latest # zizmor: ignore[unpinned-images] only main pushes latest
+      # TEMPORARY (test only): `latest` doesn't exist until main pushes it; this is the
+      # image the ci_setup merge pushed. Never merged.
+      image: ghcr.io/rocm/rocm-community-kernels-ci:sha-7dbf11975e6b1c0080474418c1d0d4eddf4765a6 # zizmor: ignore[unpinned-images] only main pushes latest
       options: --device /dev/kfd --device /dev/dri --group-add video
     # Compiled kernels with every variant can take hours.
     timeout-minutes: 720
