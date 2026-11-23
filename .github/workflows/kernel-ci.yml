@@ -6,8 +6,11 @@
 #   validate     maintainers registry, how the kernel is wrapped for
 #                kernel-builder, the community rules (ci/community.toml) and
 #                kernel-builder check-config. GitHub-hosted runner.
-#   build/test   one representative ROCm variant, check-abi, then `pytest -m
-#                kernels_ci` through `get_kernel()` on an MI350 (rocm-build-test.yml).
+#   build/test   for each GPU in the kernel's rocm-archs that CI has a runner for
+#                ([ci-runners] in ci/community.toml): one representative ROCm
+#                variant, check-abi, then `pytest -m kernels_ci` through
+#                `get_kernel()` on that GPU (rocm-build-test.yml). Every one of them
+#                gates the pull request; GPUs the kernel doesn't list aren't tested.
 #
 # And for every pull request, whatever it changes:
 #
@@ -50,6 +53,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       kernels: ${{ steps.changed.outputs.kernels }}
+      gpu-jobs: ${{ steps.changed.outputs.gpu-jobs }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -144,14 +148,16 @@ jobs:
   build-test:
     name: ROCm
     needs: [changes, validate]
-    if: needs.changes.outputs.kernels != '[]'
+    if: needs.changes.outputs.gpu-jobs != '[]'
     strategy:
       fail-fast: false
       matrix:
-        kernel: ${{ fromJSON(needs.changes.outputs.kernels) }}
+        include: ${{ fromJSON(needs.changes.outputs.gpu-jobs) }}
     uses: ./.github/workflows/rocm-build-test.yml
     with:
       kernel: ${{ matrix.kernel }}
+      arch: ${{ matrix.arch }}
+      runner: ${{ matrix.runner }}
       variants: ci
 
   result:

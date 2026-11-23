@@ -9,5 +9,8 @@ backends = ["rocm"]
 repo-id = "rocm-community/my-kernel"
 
 [torch-noarch]
+# The GPUs the kernel supports and has been tested on; CI tests it on each of them
+# that has a runner ([ci-runners] in ci/community.toml).
+rocm-archs = ["gfx950"]
 
 [kernel]

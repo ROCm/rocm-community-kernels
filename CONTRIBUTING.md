@@ -40,8 +40,10 @@ building kernels with kernel-builder.
    - `[general]`: `name` (the directory name), `version = 1`, `license`,
      `backends = ["rocm"]` (more backends are fine);
    - `[general.hub]`: `repo-id = "rocm-community/<kernel>"`;
-   - for compiled kernels, a `[kernel.*]` section with `language = "cpp-rocm"` and the
-     `rocm-archs` you have tested. Include `gfx950`; CI tests on MI350.
+   - for compiled kernels, a `[kernel.*]` section with `language = "cpp-rocm"`;
+   - `rocm-archs` (in each `[kernel.*]` section, or `[torch-noarch]` for Triton): the
+     GPUs the kernel supports, which you have tested on. CI tests it on each of them
+     that has a runner (`[ci-runners]` in `ci/community.toml`), so at least one must.
 1. Add the Python package in `torch-ext/<kernel_name>/` and, for compiled kernels, the
    Torch op binding in `torch-ext/`. Follow [AGENTS.md](AGENTS.md): relative imports,
    op names from the build-generated namespace.

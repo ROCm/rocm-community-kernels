@@ -46,21 +46,31 @@ In this order, before `HF_TOKEN` exists anywhere and before `publish.yml` reache
 ### Pull requests
 
 - Actions settings: "Require approval for all external contributors". Pull request
-  code runs on the MI350 runners once a run is approved; with "first-time
+  code runs on the GPU runners once a run is approved; with "first-time
   contributors", a contributor whose first pull request was merged needs no approval
   after that.
 - Apply [`.github/rulesets/main.json`](../.github/rulesets/main.json) to `main`.
-- Make the `rocm-community-kernels-ci` package public, so the MI350 runners can pull it
+- Make the `rocm-community-kernels-ci` package public, so the GPU runners can pull it
   without credentials.
 
-### MI350 runners
+### GPU runners
 
-The `linux-rck-mi350-*` runners run pull request code, and publishing builds there
-too. They need to be:
+`[ci-runners]` in [`community.toml`](community.toml) maps each GPU CI tests on to its
+runner label, for example `gfx950 = "linux-rck-mi350-1"`. A kernel is tested on each
+GPU in its `rocm-archs` that is listed there, and only those, and each of them gates
+its pull requests. Publishing builds and tests on the same GPUs. To add hardware, add a
+line there, in a pull request, once the runner meets the requirements below. The labels
+live in the repository, not in variables: pull requests from forks don't get the
+repository's variables.
+
+Each runner needs one GPU of that kind, Docker able to pull the CI image, and
+`/dev/kfd` and `/dev/dri`. The job checks it got the GPU it was routed for. GPU runners
+run pull request code, and publishing builds there too. They need to be:
 
 - ephemeral: a fresh runner for every job, so nothing a pull request job leaves
   behind (work directory, Docker image cache) reaches a later job;
 - limited in outbound network access to what the jobs need: GitHub and GHCR, the Nix
   caches (`cache.nixos.org`, `huggingface.cachix.org`) and PyPI.
 
-No job on them gets a secret; `scripts/tests` checks the workflows for that.
+No job on them gets a secret; `scripts/tests` checks the workflows for that, and that
+no workflow names a runner label of its own.

@@ -13,11 +13,14 @@ Writes these to $GITHUB_OUTPUT (or prints them):
   also-main       "true" when main gets the same upload
   load-args       ci_verify_load.py arguments to load that branch as a user would
   config-dir      the directory holding build.toml (and tests/)
+  gpu-jobs        the GPUs to build and test on, as changed_kernels.py gives them
+  build-arch      the GPU whose build is uploaded (the first of gpu-jobs)
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -26,7 +29,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import check_wrapping  # noqa: E402
-from changed_kernels import REPO_ROOT, SAFE_NAME  # noqa: E402
+from changed_kernels import REPO_ROOT, SAFE_NAME, gpu_jobs  # noqa: E402
 
 BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 ORG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -53,6 +56,9 @@ def target(root: Path, kernel: str, hub_org: str, branch: str = "") -> dict:
     if not isinstance(version, int) or isinstance(version, bool):
         raise ValueError(f"{kernel}: build.toml has no integer [general] version")
     out_branch = branch or f"v{version}"
+    jobs = gpu_jobs(root, [kernel])
+    if not jobs:
+        raise ValueError(f"{kernel}: none of its rocm-archs has a CI runner")
     return {
         "repo-id": f"{hub_org}/{source.split('/', 1)[1]}",
         "source-repo-id": source,
@@ -64,6 +70,8 @@ def target(root: Path, kernel: str, hub_org: str, branch: str = "") -> dict:
             else f"--revision {out_branch}"
         ),
         "config-dir": str(config_dir.relative_to(root.resolve())),
+        "gpu-jobs": json.dumps(jobs),
+        "build-arch": jobs[0]["arch"],
     }
 
 

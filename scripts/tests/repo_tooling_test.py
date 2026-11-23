@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import changed_kernels  # noqa: E402
+import check_wrapping  # noqa: E402
 import kernel_maintainers  # noqa: E402
 import publish_gate  # noqa: E402
 import publish_target  # noqa: E402
@@ -20,13 +21,20 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 
 
-def add_kernel(root: Path, name: str, version: int = 1, org: str = "rocm-community"):
+def add_kernel(
+    root: Path,
+    name: str,
+    version: int = 1,
+    org: str = "rocm-community",
+    archs: tuple[str, ...] = ("gfx950",),
+):
     k = root / name
     k.mkdir(parents=True)
     (k / "flake.nix").write_text("{}\n")
     (k / "build.toml").write_text(
         f'[general]\nname = "{name}"\nversion = {version}\n\n'
-        f'[general.hub]\nrepo-id = "{org}/{name}"\n'
+        f'[general.hub]\nrepo-id = "{org}/{name}"\n\n'
+        f"[torch-noarch]\nrocm-archs = {json.dumps(list(archs))}\n"
     )
     return k
 
@@ -101,6 +109,50 @@ def test_publish_target_defaults(tmp_path):
         "--version 1",
     )
     assert t["config-dir"] == "alpha"
+    runner = check_wrapping.load_community_rules()["ci-runners"]["gfx950"]
+    assert json.loads(t["gpu-jobs"]) == [
+        {"kernel": "alpha", "arch": "gfx950", "runner": runner}
+    ]
+    assert t["build-arch"] == "gfx950"
+
+
+def test_publish_target_needs_a_ci_gpu(tmp_path):
+    add_kernel(tmp_path, "alpha", archs=("gfx942",))
+    with pytest.raises(ValueError, match="CI runner"):
+        publish_target.target(tmp_path, "alpha", "rocm-kernels-test")
+
+
+RUNNERS = {"gfx950": "runner-mi350", "gfx942": "runner-mi300"}
+
+
+def test_gpu_jobs_follow_the_supported_gpus(tmp_path):
+    """Each kernel is tested on every GPU it lists that CI has a runner for, only."""
+    add_kernel(tmp_path, "both", archs=("gfx942", "gfx950"))
+    add_kernel(tmp_path, "mi300", archs=("gfx942", "gfx1201"))
+    add_kernel(tmp_path, "nogpu", archs=("gfx1201",))
+    jobs = changed_kernels.gpu_jobs(tmp_path, ["both", "mi300", "nogpu"], RUNNERS)
+    assert [(j["kernel"], j["arch"], j["runner"]) for j in jobs] == [
+        ("both", "gfx942", "runner-mi300"),
+        ("both", "gfx950", "runner-mi350"),
+        ("mi300", "gfx942", "runner-mi300"),
+    ]
+
+
+def test_gpu_jobs_reject_unsafe_runners(tmp_path):
+    add_kernel(tmp_path, "alpha")
+    with pytest.raises(ValueError):
+        changed_kernels.gpu_jobs(tmp_path, ["alpha"], {"gfx950": "x; rm -rf /"})
+
+
+def test_changed_kernels_github_output(tmp_path, monkeypatch, capsys):
+    add_kernel(tmp_path, "alpha")
+    out = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    root = ["--root", str(tmp_path)]
+    assert changed_kernels.main([*root, "--kernels", "alpha", "--github-output"]) == 0
+    lines = dict(ln.split("=", 1) for ln in out.read_text().splitlines())
+    assert json.loads(lines["kernels"]) == ["alpha"]
+    assert [j["arch"] for j in json.loads(lines["gpu-jobs"])] == ["gfx950"]
 
 
 def test_publish_target_branch(tmp_path):
@@ -218,13 +270,29 @@ def job_blocks(text: str) -> dict[str, str]:
     return dict(zip(parts[1::2], parts[2::2]))
 
 
+# The GPU runner comes from [ci-runners] in ci/community.toml, through the matrix.
+GPU_RUNNERS = ("${{ inputs.runner }}", "${{ matrix.runner }}")
+
+
+def test_runners_are_github_hosted_or_from_the_ci_table():
+    """No workflow names a runner label: GPU jobs get theirs from [ci-runners], and
+    everything else runs on GitHub-hosted Ubuntu."""
+    for wf in sorted(WORKFLOWS.glob("*.yml")):
+        for job, block in job_blocks(wf.read_text()).items():
+            for runner in re.findall(r"^    runs-on: (.*)$", block, re.M):
+                assert runner in GPU_RUNNERS or re.fullmatch(
+                    r"ubuntu-[0-9.]+", runner
+                ), f"{wf.name}: {job}: runs-on {runner}"
+
+
 def test_gpu_jobs_run_in_the_ci_image():
-    """Jobs on the MI350 runners run in a CI image, with the GPU devices passed in,
+    """Jobs on the GPU runners run in a CI image, with the GPU devices passed in,
     and get no secrets: pull request code runs on those runners."""
     gpu_jobs = 0
     for wf in sorted(WORKFLOWS.glob("*.yml")):
         for job, block in job_blocks(wf.read_text()).items():
-            if not re.search(r"^    runs-on: .*\blinux-rck-mi350-\d", block, re.M):
+            runners = re.findall(r"^    runs-on: (.*)$", block, re.M)
+            if not set(runners) & set(GPU_RUNNERS):
                 continue
             gpu_jobs += 1
             where = f"{wf.name}: {job}"

@@ -145,10 +145,32 @@ def test_community_org_and_name(tmp_path):
     assert not ({"community-org", "repo-name"} & codes(f))
 
 
-def test_archs_must_include_a_ci_gpu(tmp_path):
+def test_archs_must_include_a_ci_gpu(tmp_path, monkeypatch):
     toml = BUILD_TOML.replace('["gfx950"]', '["gfx1201"]')
     _, f = check_wrapping.check_kernel(make_kernel(tmp_path, toml=toml), community=True)
     assert "ci-arch" in codes(f)
+    # Any GPU CI has a runner for will do: gfx950 isn't required.
+    rules = {**check_wrapping.COMMUNITY_DEFAULTS, "ci-runners": {"gfx942": "r"}}
+    monkeypatch.setattr(check_wrapping, "load_community_rules", lambda: rules)
+    toml = BUILD_TOML.replace('["gfx950"]', '["gfx942"]')
+    k = make_kernel(tmp_path / "mi300", toml=toml)
+    _, f = check_wrapping.check_kernel(k, community=True)
+    assert "ci-arch" not in codes(f)
+
+
+def test_noarch_must_list_its_gpus(tmp_path):
+    """Community kernels list their supported GPUs, Triton (noarch) ones included."""
+    toml = BUILD_TOML.split("[torch]")[0] + "[torch-noarch]\n\n[kernel]\n"
+    k = make_kernel(tmp_path, toml=toml)
+    _, f = check_wrapping.check_kernel(k, community=True)
+    assert "rocm-archs" in codes(f)
+    _, f = check_wrapping.check_kernel(k, community=False)
+    assert "rocm-archs" not in codes(f) and "rocm-archs" in codes(f, "warning")
+    toml = toml.replace("[torch-noarch]\n", '[torch-noarch]\nrocm-archs = ["gfx950"]\n')
+    _, f = check_wrapping.check_kernel(
+        make_kernel(tmp_path / "b", toml=toml), community=True
+    )
+    assert not {"rocm-archs", "ci-arch"} & codes(f)
 
 
 def test_card_needs_notice(tmp_path):

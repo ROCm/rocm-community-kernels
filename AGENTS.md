@@ -102,5 +102,8 @@ These are configured in [ci/community.toml](ci/community.toml) and described in
   directory.
 - **Maintainers.** Every kernel has at least one maintainer (a GitHub handle) in
   `.github/kernel-maintainers.json`.
-- **Architectures.** `rocm-archs` lists only GPUs the kernel has been tested on, and
-  includes `gfx950`, which CI tests on.
+- **Architectures.** `rocm-archs` lists the GPUs the kernel supports, which are the
+  GPUs it has been tested on; Triton (noarch) kernels list them too. CI tests the
+  kernel on each of them that has a runner in `[ci-runners]` in
+  [ci/community.toml](ci/community.toml), and each of those gates the pull request. At
+  least one must have a runner.

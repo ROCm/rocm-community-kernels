@@ -26,7 +26,7 @@ COMMUNITY_DEFAULTS = {
     "hub-org": "rocm-community",
     "reserved-prefixes": ["aiter"],
     "reserved-orgs": ["amd", "amd-aiter"],
-    "ci-archs": ["gfx950"],
+    "ci-runners": {"gfx950": "linux-rck-mi350-1"},
     "card-notice": "not supported by AMD",
 }
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -74,6 +74,15 @@ def load_config(kernel_dir: Path) -> tuple[Path, dict]:
     config_dir = find_config_dir(kernel_dir)
     with open(config_dir / "build.toml", "rb") as f:
         return config_dir, tomllib.load(f)
+
+
+def rocm_archs(cfg: dict) -> list[str]:
+    """The GPUs a build.toml targets: [torch-noarch] and every [kernel.*] section."""
+    archs = set(cfg.get("torch-noarch", {}).get("rocm-archs", []))
+    for section in cfg.get("kernel", {}).values():
+        if isinstance(section, dict):
+            archs |= set(section.get("rocm-archs", []))
+    return sorted(archs)
 
 
 def check_kernel(
@@ -166,11 +175,7 @@ def check_kernel(
         )
     framework = frameworks[0] if frameworks else None
     info.framework = framework
-    archs = set(cfg.get("torch-noarch", {}).get("rocm-archs", []))
-    for section in cfg.get("kernel", {}).values():
-        if isinstance(section, dict):
-            archs |= set(section.get("rocm-archs", []))
-    info.rocm_archs = sorted(archs)
+    info.rocm_archs = rocm_archs(cfg)
     if "rocm" in backends and framework in ("torch", "tvm-ffi"):
         rocm_sections = [
             (k, v)
@@ -195,11 +200,20 @@ def check_kernel(
         and framework == "torch-noarch"
         and not cfg["torch-noarch"].get("rocm-archs")
     ):
-        warn(
-            "rocm-archs",
-            "[torch-noarch] has no rocm-archs: the package will load on any ROCm GPU",
-            toml_path,
-        )
+        if community:
+            # The kernel's supported GPUs: CI tests it on each of them it has a runner for.
+            err(
+                "rocm-archs",
+                "[torch-noarch] has no rocm-archs: list the GPUs the kernel supports "
+                "and has been tested on; CI tests it on those",
+                toml_path,
+            )
+        else:
+            warn(
+                "rocm-archs",
+                "[torch-noarch] has no rocm-archs: the package will load on any ROCm GPU",
+                toml_path,
+            )
 
     package = name.replace("-", "_")
     info.package = package
@@ -362,13 +376,13 @@ def _check_community(
 ) -> list[Finding]:
     rules = load_community_rules()
     out = []
-    if rocm_archs and not set(rocm_archs) & set(rules["ci-archs"]):
+    if rocm_archs and not set(rocm_archs) & set(rules["ci-runners"]):
         out.append(
             Finding(
                 "error",
                 "ci-arch",
                 f"rocm-archs {rocm_archs} include none of the GPUs CI tests on "
-                f"({', '.join(rules['ci-archs'])}), so its GPU tests can't run",
+                f"({', '.join(rules['ci-runners'])}), so its GPU tests can't run",
                 str(kernel_dir),
             )
         )
