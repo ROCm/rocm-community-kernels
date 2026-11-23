@@ -91,8 +91,9 @@ keep these, which CI checks (`scripts/check_wrapping.py`):
   goes in `src` of a `[kernel.*]` section with `language = "cpp-rocm"`, and only those
   files are copied into the build.
 - **`rocm-archs`** lists the GPUs the kernel supports and has been tested on, for
-  Triton (noarch) kernels too. CI tests the kernel on each of them that has a runner
-  (`[ci-runners]` in `ci/community.toml`); at least one must.
+  Triton (noarch) kernels too, where the key is `rocm_archs` (underscore: what
+  kernel-builder reads in `[torch-noarch]`). CI tests the kernel on each of them that
+  has a runner (`[ci-runners]` in `ci/community.toml`); at least one must.
 - **Tests** load the kernel with
   `kernels.get_kernel("rocm-community/<name>", version=<version>)` and never import the
   package. Mark a fast subset (under a minute in total) `@pytest.mark.kernels_ci`; that
@@ -126,8 +127,7 @@ python3 scripts/kernel_ci.py run --kernel <kernel> --ci    # with Nix and an AMD
 
 Use the `check-community-kernel` skill to explain and fix any finding, then the
 `lint-community-kernels` skill before committing. A `license-file` warning means
-`LICENSE` is still missing. On a Triton kernel, the `rocm-archs` warning is expected:
-the package loads on any ROCm GPU.
+`LICENSE` is still missing.
 
 ## Rules
 

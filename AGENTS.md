@@ -103,7 +103,8 @@ These are configured in [ci/community.toml](ci/community.toml) and described in
 - **Maintainers.** Every kernel has at least one maintainer (a GitHub handle) in
   `.github/kernel-maintainers.json`.
 - **Architectures.** `rocm-archs` lists the GPUs the kernel supports, which are the
-  GPUs it has been tested on; Triton (noarch) kernels list them too. CI tests the
+  GPUs it has been tested on; Triton (noarch) kernels list them too, as `rocm_archs`
+  in `[torch-noarch]` (kernel-builder reads the underscore form there). CI tests the
   kernel on each of them that has a runner in `[ci-runners]` in
   [ci/community.toml](ci/community.toml), and each of those gates the pull request. At
   least one must have a runner.

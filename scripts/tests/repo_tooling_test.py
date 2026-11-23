@@ -34,7 +34,7 @@ def add_kernel(
     (k / "build.toml").write_text(
         f'[general]\nname = "{name}"\nversion = {version}\n\n'
         f'[general.hub]\nrepo-id = "{org}/{name}"\n\n'
-        f"[torch-noarch]\nrocm-archs = {json.dumps(list(archs))}\n"
+        f"[torch-noarch]\nrocm_archs = {json.dumps(list(archs))}\n"
     )
     return k
 

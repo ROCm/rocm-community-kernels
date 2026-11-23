@@ -10,7 +10,8 @@ repo-id = "rocm-community/my-kernel"
 
 [torch-noarch]
 # The GPUs the kernel supports and has been tested on; CI tests it on each of them
-# that has a runner ([ci-runners] in ci/community.toml).
-rocm-archs = ["gfx950"]
+# that has a runner ([ci-runners] in ci/community.toml). rocm_archs with an
+# underscore: that's what kernel-builder reads in this section.
+rocm_archs = ["gfx950"]
 
 [kernel]

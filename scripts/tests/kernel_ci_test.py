@@ -58,6 +58,84 @@ def test_kfd_gfx_names(tmp_path):
     assert kernel_ci.kfd_gfx_names(tmp_path / "missing") == []
 
 
+NOARCH_KERNEL = {
+    "flake.nix": "{}\n",
+    "build.toml": (
+        '[general]\nname = "demo"\nversion = 1\nedition = 6\nlicense = "MIT"\n'
+        'backends = ["rocm"]\n\n[general.hub]\nrepo-id = "rocm-community/demo"\n\n'
+        '[torch-noarch]\nrocm-archs = ["gfx950"]\n\n[kernel]\n'
+    ),
+    "README.md": "# demo\n\nThis kernel is not supported by AMD.\n",
+    "LICENSE": "MIT\n",
+    "torch-ext/demo/__init__.py": "def f():\n    pass\n",
+    "tests/demo_test.py": (
+        "import kernels\nimport pytest\n\n"
+        'demo = kernels.get_kernel("rocm-community/demo", version=1)\n\n\n'
+        "@pytest.mark.kernels_ci\ndef test_demo():\n    assert demo\n"
+    ),
+}
+PARSE_ERROR = (
+    "Error: Cannot parse build configuration: Unknown field rocm-archs. "
+    "Expected one of pyext, cuda_capabilities, rocm_archs"
+)
+
+
+def test_validate_explains_its_errors(tmp_path, monkeypatch, capsys):
+    """A mistake shows what to fix: the finding, check-config's own error, and in
+    GitHub Actions an annotation on the file."""
+    k = tmp_path / "demo"
+    for rel, text in NOARCH_KERNEL.items():
+        (k / rel).parent.mkdir(parents=True, exist_ok=True)
+        (k / rel).write_text(text)
+
+    def run(cmd, log, cwd=None):
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(f"$ check-config\ncopying path...\n{PARSE_ERROR}\n")
+        return 1, 0.0
+
+    args = SimpleNamespace(hf_rules_only=False, require_backend="rocm")
+    args.no_check_config = False
+    ctx = SimpleNamespace(args=args, env={"nix": True}, dry_run=False, run=run)
+    kr = kernel_ci.KernelRun({"path": "demo"}, k, tmp_path / "out")
+    kr.out.mkdir()
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    res = kernel_ci.stage_validate(ctx, kr)
+    out = capsys.readouterr().out
+    assert res.status == "fail"
+    assert res.message == "2 error(s): noarch-archs-key, check-config"
+    assert "write rocm_archs" in out  # the finding says what to write
+    assert PARSE_ERROR in res.details["check_config_error"]
+    assert "::error file=" in out and "title=demo%3A noarch-archs-key::" in out
+    assert "title=demo%3A check-config::kernel-builder check-config failed" in out
+
+
+def test_summary_lists_validate_errors(tmp_path, monkeypatch):
+    (tmp_path / "k").mkdir()
+    finding = {"level": "error", "code": "noarch-archs-key", "message": "write it"}
+    details = {"findings": [finding], "check_config_error": "check-config failed: x"}
+    monkeypatch.setitem(
+        kernel_ci.STAGE_FUNCS,
+        "validate",
+        lambda ctx, kr: kernel_ci.StageResult("fail", message="2", details=details),
+    )
+    args = ["run", "--kernels-root", str(tmp_path), "--kernel", "k"]
+    args += ["--stages", "validate", "--out", str(tmp_path / "out"), "--run-id", "r"]
+    assert kernel_ci.main(args) == 1
+    summary = (tmp_path / "out" / "r" / "summary.md").read_text()
+    assert "- k: `noarch-archs-key`: write it" in summary
+    assert "- k: check-config failed: x" in summary
+
+
+def test_annotations(monkeypatch, capsys):
+    kernel_ci.annotate("error", "t", "m")  # outside GitHub Actions: nothing
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    path = kernel_ci.REPO_ROOT / "demo" / "build.toml"
+    kernel_ci.annotate("warning", "demo: x", "50% done\nnext", path)
+    assert capsys.readouterr().out == (
+        "::warning file=demo/build.toml,title=demo%3A x::50%25 done%0Anext\n"
+    )
+
+
 def test_fail_on_skip(tmp_path, monkeypatch):
     (tmp_path / "k").mkdir()
 

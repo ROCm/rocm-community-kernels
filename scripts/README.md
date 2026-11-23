@@ -21,7 +21,9 @@ Runs three stages per kernel:
 1. **validate**: `check_wrapping.py` (with the community rules unless
    `--hf-rules-only`), then `kernel-builder check-config`. kernel-builder's CLI comes
    from the repository's `flake.lock` (`nix run .#kernel-builder`); builds use each
-   kernel's own `flake.lock`.
+   kernel's own `flake.lock`. Errors say what to fix: each finding, and check-config's
+   own error line when it fails, are printed in the log, listed under the summary
+   table and, in GitHub Actions, posted as annotations on the file.
 1. **build**: `nix build .#backendCi.rocm` (one representative variant, `--ci`) or
    `.#backendBundle.rocm` (every variant), then `kernel-builder check-abi` for compiled
    kernels. Memory-heavy kernels get Nix job limits from `build-concurrency.json`.
@@ -65,7 +67,8 @@ Reports errors and warnings for each kernel; exits 1 if there's an error.
 - **Community rules** (`--community`), from [`ci/community.toml`](../ci/community.toml):
   repo id `rocm-community/<directory name>`; no `aiter-` names, no `amd` or `amd-aiter`
   organisations, no AITER code; the card says "not supported by AMD"; `rocm-archs` is
-  listed (Triton kernels too) and includes at least one GPU in `[ci-runners]`; a
+  listed (Triton kernels too, as `rocm_archs` in `[torch-noarch]`, the form
+  kernel-builder reads there) and includes at least one GPU in `[ci-runners]`; a
   `LICENSE` file (warning only).
 
 ```bash
