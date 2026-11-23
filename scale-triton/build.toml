@@ -9,5 +9,6 @@ backends = ["rocm"]
 repo-id = "rocm-community/scale-triton"
 
 [torch-noarch]
+rocm_archs = ["gfx950"]
 
 [kernel]
