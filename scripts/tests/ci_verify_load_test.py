@@ -38,7 +38,11 @@ CONFTEST = (
 def make_build(root: Path) -> Path:
     """A Python-only build variant for this machine, with a real digest."""
     from kernels._rust import Digest, DigestAlgorithm
-    from kernels.backends import _backend
+
+    try:
+        from kernels._internals.backends import _backend
+    except ImportError:  # kernels < 0.19
+        from kernels.backends import _backend
 
     backend = _backend().name
     variant = root / "build" / f"torch-{backend}"
