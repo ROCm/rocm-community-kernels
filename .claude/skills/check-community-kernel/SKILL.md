@@ -39,21 +39,22 @@ changing `scripts/`, `ci/community.toml` or the workflows.
 
 ### build.toml and layout
 
-| Code           | Meaning                                                                                          | Fix                                                                           |
-| -------------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
-| `name`         | The directory name has characters outside `A-Z a-z 0-9 _ -`                                      | Rename the directory                                                          |
-| `flake`        | No `flake.nix`                                                                                   | Use the template from the `add-community-kernel` skill, then `nix flake lock` |
-| `build-toml`   | `build.toml` missing or not valid TOML                                                           | Add it, or fix the syntax the message points to                               |
-| `general-name` | `[general] name` missing (error) or not the directory name (warning)                             | Set it to the directory name                                                  |
-| `edition`      | Not `edition = 6` (warning)                                                                      | Set `edition = 6`; older files are upgraded with a warning                    |
-| `version`      | `[general] version` missing or not a non-negative integer                                        | Set an integer; it selects the Hub branch `v<version>`                        |
-| `license`      | `[general] license` missing                                                                      | Add the SPDX id of the kernel's licence                                       |
-| `repo-id`      | `[general.hub] repo-id` missing or not `<org>/<name>`                                            | `repo-id = "rocm-community/<kernel>"`                                         |
-| `backends`     | `rocm` isn't in `[general] backends`                                                             | Add `"rocm"`                                                                  |
-| `framework`    | Not exactly one of `[torch]`, `[torch-noarch]`, `[tvm-ffi]`                                      | `[torch]` for compiled kernels, `[torch-noarch]` for Triton / Python-only     |
-| `rocm-kernel`  | `rocm` is a backend of a compiled kernel, but no `[kernel.*]` has `language = "cpp-rocm"`        | Add a `cpp-rocm` section listing the HIP sources                              |
-| `rocm-archs`   | A `cpp-rocm` section or `[torch-noarch]` has no `rocm-archs` (noarch: a warning in HF-only mode) | List the GPUs the kernel supports and was tested on; CI tests it on those     |
-| `card`         | No `CARD.md` or `README.md` (warning)                                                            | Add `CARD.md` from `docs/CARD_TEMPLATE_COMMUNITY.md`                          |
+| Code               | Meaning                                                                                                           | Fix                                                                           |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `name`             | The directory name has characters outside `A-Z a-z 0-9 _ -`                                                       | Rename the directory                                                          |
+| `flake`            | No `flake.nix`                                                                                                    | Use the template from the `add-community-kernel` skill, then `nix flake lock` |
+| `build-toml`       | `build.toml` missing or not valid TOML                                                                            | Add it, or fix the syntax the message points to                               |
+| `general-name`     | `[general] name` missing (error) or not the directory name (warning)                                              | Set it to the directory name                                                  |
+| `edition`          | Not `edition = 6` (warning)                                                                                       | Set `edition = 6`; older files are upgraded with a warning                    |
+| `version`          | `[general] version` missing or not a non-negative integer                                                         | Set an integer; it selects the Hub branch `v<version>`                        |
+| `license`          | `[general] license` missing                                                                                       | Add the SPDX id of the kernel's licence                                       |
+| `repo-id`          | `[general.hub] repo-id` missing or not `<org>/<name>`                                                             | `repo-id = "rocm-community/<kernel>"`                                         |
+| `backends`         | `rocm` isn't in `[general] backends`                                                                              | Add `"rocm"`                                                                  |
+| `framework`        | Not exactly one of `[torch]`, `[torch-noarch]`, `[tvm-ffi]`                                                       | `[torch]` for compiled kernels, `[torch-noarch]` for Triton / Python-only     |
+| `rocm-kernel`      | `rocm` is a backend of a compiled kernel, but no `[kernel.*]` has `language = "cpp-rocm"`                         | Add a `cpp-rocm` section listing the HIP sources                              |
+| `rocm-archs`       | A `cpp-rocm` section has no `rocm-archs`, or `[torch-noarch]` no `rocm_archs` (noarch: a warning in HF-only mode) | List the GPUs the kernel supports and was tested on; CI tests it on those     |
+| `noarch-archs-key` | `[torch-noarch]` uses `rocm-archs`, which kernel-builder's check-config rejects                                   | Write `rocm_archs` (underscore) in that section                               |
+| `card`             | No `CARD.md` or `README.md` (warning)                                                                             | Add `CARD.md` from `docs/CARD_TEMPLATE_COMMUNITY.md`                          |
 
 ### Python package and op registration
 

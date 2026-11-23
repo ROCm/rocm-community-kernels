@@ -166,11 +166,26 @@ def test_noarch_must_list_its_gpus(tmp_path):
     assert "rocm-archs" in codes(f)
     _, f = check_wrapping.check_kernel(k, community=False)
     assert "rocm-archs" not in codes(f) and "rocm-archs" in codes(f, "warning")
-    toml = toml.replace("[torch-noarch]\n", '[torch-noarch]\nrocm-archs = ["gfx950"]\n')
-    _, f = check_wrapping.check_kernel(
-        make_kernel(tmp_path / "b", toml=toml), community=True
+    listed = toml.replace(
+        "[torch-noarch]\n", '[torch-noarch]\nrocm_archs = ["gfx950"]\n'
     )
-    assert not {"rocm-archs", "ci-arch"} & codes(f)
+    info, f = check_wrapping.check_kernel(
+        make_kernel(tmp_path / "b", toml=listed), community=True
+    )
+    assert not {"rocm-archs", "ci-arch", "noarch-archs-key"} & codes(f)
+    assert info.rocm_archs == ["gfx950"]
+
+
+def test_noarch_archs_key(tmp_path):
+    """kernel-builder reads rocm_archs in [torch-noarch]: rocm-archs fails its
+    check-config, so it's an error in every mode, with the fix in the message."""
+    toml = BUILD_TOML.split("[torch]")[0] + '[torch-noarch]\nrocm-archs = ["gfx950"]\n'
+    k = make_kernel(tmp_path, toml=toml + "\n[kernel]\n")
+    for community in (True, False):
+        _, f = check_wrapping.check_kernel(k, community=community)
+        assert "noarch-archs-key" in codes(f)
+    msg = next(x.message for x in f if x.code == "noarch-archs-key")
+    assert 'rocm_archs = ["gfx950"]' in msg
 
 
 def test_card_needs_notice(tmp_path):

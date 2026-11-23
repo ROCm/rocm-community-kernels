@@ -76,9 +76,14 @@ def load_config(kernel_dir: Path) -> tuple[Path, dict]:
         return config_dir, tomllib.load(f)
 
 
+# kernel-builder reads `rocm_archs` (underscore) in [torch-noarch], unlike the
+# `rocm-archs` of [kernel.*] sections, and check-config rejects `rocm-archs` there.
+NOARCH_ARCHS = "rocm_archs"
+
+
 def rocm_archs(cfg: dict) -> list[str]:
     """The GPUs a build.toml targets: [torch-noarch] and every [kernel.*] section."""
-    archs = set(cfg.get("torch-noarch", {}).get("rocm-archs", []))
+    archs = set(cfg.get("torch-noarch", {}).get(NOARCH_ARCHS, []))
     for section in cfg.get("kernel", {}).values():
         if isinstance(section, dict):
             archs |= set(section.get("rocm-archs", []))
@@ -195,23 +200,33 @@ def check_kernel(
                     f"[kernel.{k}] has no rocm-archs (the loader checks the GPU against them)",
                     toml_path,
                 )
-    if (
+    noarch = cfg.get("torch-noarch", {})
+    if framework == "torch-noarch" and "rocm-archs" in noarch:
+        err(
+            "noarch-archs-key",
+            "[torch-noarch] uses rocm-archs; write rocm_archs = "
+            f"{json.dumps(noarch['rocm-archs'])} instead (kernel-builder reads the "
+            "underscore form in this section, and check-config rejects rocm-archs)",
+            toml_path,
+        )
+    elif (
         "rocm" in backends
         and framework == "torch-noarch"
-        and not cfg["torch-noarch"].get("rocm-archs")
+        and not noarch.get(NOARCH_ARCHS)
     ):
         if community:
             # The kernel's supported GPUs: CI tests it on each of them it has a runner for.
             err(
                 "rocm-archs",
-                "[torch-noarch] has no rocm-archs: list the GPUs the kernel supports "
-                "and has been tested on; CI tests it on those",
+                "[torch-noarch] has no rocm_archs: list the GPUs the kernel supports "
+                'and has been tested on, e.g. rocm_archs = ["gfx950"]; CI tests it '
+                "on those",
                 toml_path,
             )
         else:
             warn(
                 "rocm-archs",
-                "[torch-noarch] has no rocm-archs: the package will load on any ROCm GPU",
+                "[torch-noarch] has no rocm_archs: the package will load on any ROCm GPU",
                 toml_path,
             )
 

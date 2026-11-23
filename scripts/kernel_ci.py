@@ -314,6 +314,44 @@ def arch_mismatch(ctx, kr: KernelRun) -> str | None:
     )
 
 
+def annotate(level: str, title: str, message: str, path: str | Path = "") -> None:
+    """In GitHub Actions, an error or warning annotation: it shows in the pull
+    request's checks summary, and on the file in "Files changed"."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+
+    def esc(s: str, prop: bool = False) -> str:
+        s = s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        return s.replace(":", "%3A").replace(",", "%2C") if prop else s
+
+    props = [f"title={esc(title, True)}"]
+    if path:
+        p = Path(path)
+        try:
+            p = p.resolve().relative_to(REPO_ROOT)
+        except ValueError:
+            pass
+        props.insert(0, f"file={esc(str(p), True)}")
+    kind = "error" if level == "error" else "warning"
+    print(f"::{kind} {','.join(props)}::{esc(message)}", flush=True)
+
+
+def log_tail(log: Path, n: int = 20) -> list[str]:
+    if not log.is_file():
+        return []
+    return [ln for ln in log.read_text(errors="replace").splitlines() if ln.strip()][
+        -n:
+    ]
+
+
+def error_line(lines: list[str]) -> str | None:
+    """The line that says what went wrong: the last one mentioning an error."""
+    for ln in reversed(lines):
+        if re.search(r"(?i)\berror\b|unknown field|cannot parse", ln):
+            return ln.strip()
+    return lines[-1].strip() if lines else None
+
+
 def build_variants(build: Path) -> list[str]:
     """Variant folders in a kernel-builder output directory (each has metadata.json)."""
     return sorted(p.name for p in build.iterdir() if (p / "metadata.json").is_file())
@@ -341,17 +379,35 @@ def stage_validate(ctx, kr: KernelRun) -> StageResult:
     }
     for f in findings:
         print(f"    {f.level.upper():7} {f.code}: {f.message}")
+        annotate(f.level, f"{kr.name}: {f.code}", f.message, f.path)
+    codes = [f.code for f in errors]
     if (ctx.env["nix"] or ctx.dry_run) and not ctx.args.no_check_config:
+        log = kr.out / "validate.log"
         rc, _ = ctx.run(
-            [*KERNEL_BUILDER, "check-config", info.config_dir],
-            kr.out / "validate.log",
-            cwd=kr.kernel_dir,
+            [*KERNEL_BUILDER, "check-config", info.config_dir], log, cwd=kr.kernel_dir
         )
         details["kernel_builder_check_config"] = rc
         if rc:
-            errors.append("kernel-builder check-config failed")
-    if errors:
-        return StageResult("fail", message=f"{len(errors)} error(s)", details=details)
+            tail = log_tail(log)
+            why = error_line(tail)
+            msg = "kernel-builder check-config failed" + (f": {why}" if why else "")
+            print("    kernel-builder check-config output (last lines):")
+            for ln in tail:
+                print(f"      {ln}")
+            annotate(
+                "error",
+                f"{kr.name}: check-config",
+                msg,
+                Path(info.config_dir) / "build.toml",
+            )
+            details["check_config_error"] = msg
+            codes.append("check-config")
+    if codes:
+        return StageResult(
+            "fail",
+            message=f"{len(codes)} error(s): {', '.join(codes)}",
+            details=details,
+        )
     return StageResult(
         "pass", message=f"{details['warnings']} warning(s)", details=details
     )
@@ -619,6 +675,23 @@ def write_report(
         lines.append(
             f"| {kr.name} | " + " | ".join(c.replace("|", "/") for c in cells) + " |"
         )
+    errors = [
+        (kr.name, e)
+        for kr in runs
+        if (r := kr.results.get("validate")) and r.details
+        for e in [
+            f"`{f['code']}`: {f['message']}"
+            for f in r.details.get("findings", [])
+            if f["level"] == "error"
+        ]
+        + (
+            [r.details["check_config_error"]]
+            if "check_config_error" in r.details
+            else []
+        )
+    ]
+    if errors:
+        lines += ["", "**Errors**", ""] + [f"- {k}: {e}" for k, e in errors]
     (ctx.out / "summary.md").write_text("\n".join(lines) + "\n")
     print(f"\nsummary: {ctx.out / 'summary.md'}")
     print("\n".join(lines[header:]))
