@@ -127,6 +127,7 @@ def test_summary_lists_validate_errors(tmp_path, monkeypatch):
 
 
 def test_annotations(monkeypatch, capsys):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     kernel_ci.annotate("error", "t", "m")  # outside GitHub Actions: nothing
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     path = kernel_ci.REPO_ROOT / "demo" / "build.toml"
