@@ -9,9 +9,11 @@
 # with --fail-on-skip so that a missing GPU, missing Nix or a GPU the kernel
 # doesn't target fails the gate instead of skipping it.
 #
-# Runner: linux-rck-mi350-1, the project's MI350 (gfx950) runners with one GPU;
-# the kernels_ci tests use one (linux-rck-mi350-2/-4/-8 have more). A runner needs
-# Docker able to pull the CI image (for a Kubernetes runner set, a container mode
+# Runner: the one the caller passes for the GPU this job tests (`runner`, `arch`), from
+# [ci-runners] in ci/community.toml: a kernel is tested on each GPU in its rocm-archs
+# that has a runner there. One GPU is enough; the kernels_ci tests use one. kernel_ci.py
+# --gpu-arch fails the job if the runner's GPU isn't the one it was routed for. A
+# runner needs Docker able to pull the CI image (for a Kubernetes runner set, a container mode
 # that allows `container:`) and a ROCm driver exposing /dev/kfd and /dev/dri. The
 # job runs in the CI image, with those two devices passed in: ci/docker/Dockerfile,
 # which ci-image.yml builds and pushes to the GitHub Container Registry. The job uses
@@ -44,6 +46,14 @@ on:
         description: Kernel directory name
         required: true
         type: string
+      arch:
+        description: The GPU this job tests on (e.g. gfx950), from [ci-runners] in ci/community.toml
+        required: true
+        type: string
+      runner:
+        description: The runner (runs-on label) for that GPU, from [ci-runners]
+        required: true
+        type: string
       variants:
         description: "ci: one representative variant (.#backendCi); all: every variant (.#backendBundle)"
         required: false
@@ -60,8 +70,8 @@ permissions:
 
 jobs:
   build-test:
-    name: Build and GPU test
-    runs-on: linux-rck-mi350-1
+    name: Build and GPU test (${{ inputs.arch }})
+    runs-on: ${{ inputs.runner }}
     # The CI image (see the header).
     container:
       image: ghcr.io/rocm/rocm-community-kernels-ci:latest # zizmor: ignore[unpinned-images] only main pushes latest
@@ -70,11 +80,18 @@ jobs:
     timeout-minutes: 720
     steps:
       # Reject kernel names outside the safe charset before any step uses them.
-      - name: Validate kernel name
+      - name: Validate the inputs
         env:
           KERNEL: ${{ inputs.kernel }}
           VARIANTS: ${{ inputs.variants }}
+          ARCH: ${{ inputs.arch }}
         run: |
+          case "$ARCH" in
+            ''|*[!A-Za-z0-9_.-]*)
+              echo "::error::Invalid GPU name: must match ^[A-Za-z0-9._-]+$"
+              exit 1
+              ;;
+          esac
           case "$KERNEL" in
             ''|*[!A-Za-z0-9_-]*)
               echo "::error::Invalid kernel name: must match ^[A-Za-z0-9_-]+$"
@@ -101,6 +118,7 @@ jobs:
           if command -v rocminfo > /dev/null; then
             rocminfo | grep -E '^\s+Name:\s+gfx' | sort -u
           fi
+          grep -h gfx_target_version /sys/class/kfd/kfd/topology/nodes/*/properties | sort -u || true
 
       # validate (wrapping and community rules, kernel-builder check-config),
       # build (nix build, check-abi), test (nix build the ROCm 7.1 .#ciTests.<variant>,
@@ -109,8 +127,9 @@ jobs:
         env:
           KERNEL: ${{ inputs.kernel }}
           VARIANTS: ${{ inputs.variants }}
+          ARCH: ${{ inputs.arch }}
         run: |
-          args=(--kernel "$KERNEL" --stages validate,build,test --fail-on-skip)
+          args=(--kernel "$KERNEL" --stages validate,build,test --fail-on-skip --gpu-arch "$ARCH")
           if [ "$VARIANTS" = "ci" ]; then
             args+=(--ci)
           fi
@@ -131,7 +150,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ci-${{ inputs.kernel }}-${{ inputs.variants }}
+          name: ci-${{ inputs.kernel }}-${{ inputs.variants }}-${{ inputs.arch }}
           path: |
             ${{ runner.temp }}/ci-out
             !${{ runner.temp }}/ci-out/**/build

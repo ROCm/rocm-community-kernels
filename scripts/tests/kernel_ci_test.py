@@ -36,6 +36,28 @@ def test_arch_gating():
     )
 
 
+def test_gpu_arch_routing():
+    """--gpu-arch: the job must be on the GPU it was routed to."""
+    routed = SimpleNamespace(
+        gpu_archs=["gfx950"], dry_run=False, args=SimpleNamespace(gpu_arch="gfx942")
+    )
+    why = kernel_ci.arch_mismatch(routed, kernel(["gfx942", "gfx950"]))
+    assert why and "gfx942" in why
+    routed.args.gpu_arch = "gfx950"
+    assert kernel_ci.arch_mismatch(routed, kernel(["gfx942", "gfx950"])) is None
+
+
+def test_kfd_gfx_names(tmp_path):
+    """The GPU names from the KFD topology, when rocminfo isn't installed."""
+    for node, version in (("0", 0), ("1", 90500), ("2", 90010), ("3", 110001)):
+        (tmp_path / node).mkdir()
+        (tmp_path / node / "properties").write_text(
+            f"cpu_cores_count 0\ngfx_target_version {version}\nsimd_count 256\n"
+        )
+    assert kernel_ci.kfd_gfx_names(tmp_path) == ["gfx1101", "gfx90a", "gfx950"]
+    assert kernel_ci.kfd_gfx_names(tmp_path / "missing") == []
+
+
 def test_fail_on_skip(tmp_path, monkeypatch):
     (tmp_path / "k").mkdir()
 

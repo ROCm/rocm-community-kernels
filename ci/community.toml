@@ -12,10 +12,14 @@ hub-org = "rocm-community"
 reserved-prefixes = ["aiter"]
 reserved-orgs = ["amd", "amd-aiter"]
 
-# GPUs the CI tests on. A kernel's rocm-archs must include at least one of them, or
-# its GPU tests can't run. The CI runners are MI350s.
-ci-archs = ["gfx950"]
-
 # Every kernel's CARD.md (or README.md) must carry this notice; see
 # docs/CARD_TEMPLATE_COMMUNITY.md.
 card-notice = "not supported by AMD"
+
+# The GPUs CI tests on, and the runner (its runs-on label) for each. A kernel is
+# tested on, and its pull requests gated by, each GPU in its rocm-archs listed here;
+# at least one must be. Adding hardware is a line here (see ci/README.md for what a
+# runner needs). Kept in the repository: pull requests from forks don't get the
+# repository's variables.
+[ci-runners]
+gfx950 = "linux-rck-mi350-1"

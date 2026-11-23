@@ -90,8 +90,9 @@ keep these, which CI checks (`scripts/check_wrapping.py`):
 - **Sources listed in `build.toml`**: every `.hip`, `.cpp` and header the build needs
   goes in `src` of a `[kernel.*]` section with `language = "cpp-rocm"`, and only those
   files are copied into the build.
-- **`rocm-archs`** (compiled kernels) lists only GPUs the kernel has been tested on,
-  and includes `gfx950`, which CI tests on.
+- **`rocm-archs`** lists the GPUs the kernel supports and has been tested on, for
+  Triton (noarch) kernels too. CI tests the kernel on each of them that has a runner
+  (`[ci-runners]` in `ci/community.toml`); at least one must.
 - **Tests** load the kernel with
   `kernels.get_kernel("rocm-community/<name>", version=<version>)` and never import the
   package. Mark a fast subset (under a minute in total) `@pytest.mark.kernels_ci`; that

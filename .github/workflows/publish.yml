@@ -10,9 +10,11 @@
 #            branch limit, and HF_TOKEN is only an environment secret), then resolve
 #            the upload target (scripts/publish_target.py): the organisation from
 #            the hub_org input or the HUB_ORG variable, the name and version from
-#            build.toml, branch v<version> by default
-#   build    every ROCm variant (.#backendBundle.rocm), check-abi and the GPU tests
-#            on an MI350 (rocm-build-test.yml); no secrets
+#            build.toml, branch v<version> by default, and the GPUs to test on: each
+#            in the kernel's rocm-archs that CI has a runner for (ci/community.toml)
+#   build    on each of those GPUs: every ROCm variant (.#backendBundle.rocm),
+#            check-abi and the GPU tests (rocm-build-test.yml); no secrets. The
+#            first GPU's build is the one uploaded
 #   upload   waits for approval in the hf-rocm-community environment (AMD
 #            maintainers), then signs each variant's metadata.json with cosign and
 #            runs `kernel-builder upload` (pinned by the repository's flake.lock);
@@ -23,7 +25,7 @@
 #            (HF_READ_TOKEN): downloads the kernel (scripts/ci_download.py, nothing
 #            is imported), checks each variant's metadata.json was signed by this
 #            workflow on main, and passes the download on as an artifact
-#   verify   on the MI350, with no secrets, in what a user has: a ROCm PyTorch image
+#   verify   on each of those GPUs, with no secrets, in what a user has: a ROCm PyTorch image
 #            (the CI_USER_IMAGE variable) plus `kernels` and pytest, no Nix. Its
 #            Torch and ROCm must match a variant the build makes. `get_kernel()`
 #            loads the kernel offline from the download, and the kernel's
@@ -84,6 +86,8 @@ jobs:
       also-main: ${{ steps.target.outputs.also-main }}
       load-args: ${{ steps.target.outputs.load-args }}
       config-dir: ${{ steps.target.outputs.config-dir }}
+      gpu-jobs: ${{ steps.target.outputs.gpu-jobs }}
+      build-arch: ${{ steps.target.outputs.build-arch }}
     steps:
       - name: Publish from main only
         if: github.ref != 'refs/heads/main'
@@ -129,11 +133,18 @@ jobs:
     needs: target
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.target.outputs.gpu-jobs) }}
     uses: ./.github/workflows/rocm-build-test.yml
     with:
       kernel: ${{ inputs.kernel }}
+      arch: ${{ matrix.arch }}
+      runner: ${{ matrix.runner }}
       variants: all
-      keep-build: true
+      # Every GPU builds and tests; one build is uploaded.
+      keep-build: ${{ matrix.arch == needs.target.outputs.build-arch }}
 
   upload:
     name: Sign and upload
@@ -206,7 +217,7 @@ jobs:
           path: ${{ runner.temp }}/upload*.json
           retention-days: 30
 
-  # The read token stays on a GitHub-hosted runner: the MI350 runners also run pull
+  # The read token stays on a GitHub-hosted runner: the GPU runners also run pull
   # request code, so no secret goes there.
   download:
     name: Download from the Hub and check signatures
@@ -281,9 +292,13 @@ jobs:
           retention-days: 1
 
   verify:
-    name: Load from the Hub and test
+    name: Load from the Hub and test (${{ matrix.arch }})
     needs: [target, download]
-    runs-on: linux-rck-mi350-1
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.target.outputs.gpu-jobs) }}
+    runs-on: ${{ matrix.runner }}
     # A ROCm PyTorch image matching a built variant (see the header). An unset
     # variable fails the pull with this name.
     container:
@@ -363,7 +378,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: verify-${{ inputs.kernel }}
+          name: verify-${{ inputs.kernel }}-${{ matrix.arch }}
           path: |
             ${{ runner.temp }}/download.json
             ${{ runner.temp }}/verify.json

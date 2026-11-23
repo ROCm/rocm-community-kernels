@@ -7,7 +7,7 @@ The scripts the CI (the GitHub workflows) runs. Contributors can run them locall
 | `kernel_ci.py`          | Runs the pull request stages for kernels: validate, build, GPU test                | `kernel-ci.yml`, `rocm-build-test.yml`, contributors |
 | `check_wrapping.py`     | Checks a kernel is packaged correctly for kernel-builder, plus the community rules | `kernel_ci.py` (validate stage), contributors        |
 | `ci_verify_load.py`     | Loads a kernel with `get_kernel()` as a user would, then runs its tests            | `publish.yml` (verify job)                           |
-| `changed_kernels.py`    | Lists the kernels a pull request changes                                           | `kernel-ci.yml`                                      |
+| `changed_kernels.py`    | Lists the kernels a pull request changes, and the GPU jobs for them                | `kernel-ci.yml`, `publish_target.py`                 |
 | `kernel_maintainers.py` | Checks the kernel maintainers registry                                             | `kernel-ci.yml`                                      |
 | `publish_target.py`     | Works out where a publish uploads to, and how to load it back                      | `publish.yml`                                        |
 | `publish_gate.py`       | Checks the publish approval gate (environment, reviewers, token) is in place       | `publish.yml` (target job)                           |
@@ -35,6 +35,10 @@ Runs three stages per kernel:
 Writes `summary.md` and `summary.json`, and per kernel `findings.json`, logs and the
 build, to `ci-out/<run-id>/`.
 
+- `--gpu-arch <gfx>` names the GPU the run is for: the test stage doesn't run unless
+  the machine has it (from `rocminfo`, or the KFD topology in sysfs when ROCm isn't
+  installed, as in the CI image). The workflows pass the GPU each job was routed to,
+  so a mislabelled runner fails instead of testing the wrong GPU.
 - `--fail-on-skip` makes a stage that can't run (no GPU, no Nix, or a GPU the kernel
   doesn't target) fail instead of skip. The workflows use it, so a gate never passes
   without running.
@@ -60,8 +64,9 @@ Reports errors and warnings for each kernel; exits 1 if there's an error.
   kernel with `get_kernel()` and mark a fast subset `kernels_ci`.
 - **Community rules** (`--community`), from [`ci/community.toml`](../ci/community.toml):
   repo id `rocm-community/<directory name>`; no `aiter-` names, no `amd` or `amd-aiter`
-  organisations, no AITER code; the card says "not supported by AMD"; `rocm-archs`
-  includes a GPU CI tests on (gfx950); a `LICENSE` file (warning only).
+  organisations, no AITER code; the card says "not supported by AMD"; `rocm-archs` is
+  listed (Triton kernels too) and includes at least one GPU in `[ci-runners]`; a
+  `LICENSE` file (warning only).
 
 ```bash
 python3 scripts/check_wrapping.py --community <kernel>
@@ -97,8 +102,15 @@ kernel is a top-level directory with `flake.nix` and `build.toml` (or `src/build
 `--kernels a,b` or `--kernels all` names them instead, for manual runs. Names outside
 `[A-Za-z0-9_-]` are rejected, because they end up in workflow commands.
 
+It also works out the GPU jobs, the matrix the workflows build and test with: one
+`{kernel, arch, runner}` per GPU in a kernel's `rocm-archs` that has a runner in
+`[ci-runners]` ([`ci/community.toml`](../ci/community.toml)). A kernel is tested on the
+GPUs it supports, and only those. `--gpu-jobs` prints them; `--github-output` writes
+both as `kernels` and `gpu-jobs`.
+
 ```bash
 python3 scripts/changed_kernels.py --base origin/main --head HEAD
+python3 scripts/changed_kernels.py --kernels all --gpu-jobs
 ```
 
 ## `kernel_maintainers.py`

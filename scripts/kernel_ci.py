@@ -260,9 +260,31 @@ def git_sha(path: Path) -> str | None:
     return r.stdout.strip() or None
 
 
+KFD_NODES = Path("/sys/class/kfd/kfd/topology/nodes")
+
+
+def kfd_gfx_names(nodes: Path = KFD_NODES) -> list[str]:
+    """GPU names from the KFD topology, for when rocminfo isn't installed (the CI
+    image has no ROCm of its own). gfx_target_version 90500 is gfx950, 90010 gfx90a."""
+    names = set()
+    for props in nodes.glob("*/properties"):
+        try:
+            text = props.read_text()
+        except OSError:
+            continue
+        for ln in text.splitlines():
+            key, _, value = ln.partition(" ")
+            if key == "gfx_target_version" and value.strip().isdigit():
+                v = int(value)
+                if v:  # 0: a CPU node
+                    names.add(f"gfx{v // 10000}{v // 100 % 100:x}{v % 100:x}")
+    return sorted(names)
+
+
 def gpu_info() -> dict:
     if not shutil.which("rocminfo"):
-        return {}
+        names = kfd_gfx_names()
+        return {"gfx": names} if names else {}
     r = subprocess.run(["rocminfo"], capture_output=True, text=True)
     names = sorted(
         {
@@ -275,8 +297,14 @@ def gpu_info() -> dict:
 
 
 def arch_mismatch(ctx, kr: KernelRun) -> str | None:
-    """Why the GPU stages can't run here: this GPU isn't one the kernel targets."""
-    if ctx.dry_run or not kr.info or not kr.info.rocm_archs or not ctx.gpu_archs:
+    """Why the GPU stages can't run here: this GPU isn't one the kernel targets, or
+    not the one this run was routed to (--gpu-arch)."""
+    if ctx.dry_run or not ctx.gpu_archs:
+        return None
+    wanted = getattr(getattr(ctx, "args", None), "gpu_arch", None)
+    if wanted and wanted not in ctx.gpu_archs:
+        return f"this run is for {wanted}; this GPU is {', '.join(ctx.gpu_archs)}"
+    if not kr.info or not kr.info.rocm_archs:
         return None
     if set(kr.info.rocm_archs) & set(ctx.gpu_archs):
         return None
@@ -690,6 +718,11 @@ def add_run_args(r: argparse.ArgumentParser, all_stages: list[str]) -> None:
         "--no-hf-cache-check",
         action="store_true",
         help=f"build even if Nix doesn't use Hugging Face's binary cache ({HF_CACHE})",
+    )
+    r.add_argument(
+        "--gpu-arch",
+        help="the GPU this run is for (e.g. gfx950): the test stage needs it present; "
+        "the workflows pass the GPU each job was routed to",
     )
     r.add_argument(
         "--fail-on-skip",
