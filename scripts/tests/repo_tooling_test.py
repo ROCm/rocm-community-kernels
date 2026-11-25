@@ -299,6 +299,19 @@ def test_stage_tokens_and_permissions():
     assert "id-token" not in upload  # staging isn't signed
 
 
+def test_stage_reports_per_kernel_and_not_when_cancelled():
+    """Each kernel has its own status (as verify_report.status_context names it);
+    a run cancelled by a newer one doesn't overwrite that run's status."""
+    jobs = job_blocks((WORKFLOWS / "stage.yml").read_text())
+    assert 'context="Hub staging ($KERNEL)"' in jobs["target"]
+    report_if = re.search(r"^    if: (.*)$", jobs["report"], re.M)
+    assert report_if and "!cancelled()" in report_if.group(1)
+    assert "always()" not in report_if.group(1)
+    # the report file names carry the GPU (see verify_report.load_reports)
+    assert '--json "$RUNNER_TEMP/verify-$ARCH.json"' in jobs["verify"]
+    assert "${{ runner.temp }}/verify-${{ matrix.arch }}.json" in jobs["verify"]
+
+
 def test_kernel_builder_is_pinned():
     """The CI runs kernel-builder from the repository's flake.lock, never from the
     kernels default branch (the upload runs it with the Hub write token)."""

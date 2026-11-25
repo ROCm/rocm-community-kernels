@@ -104,7 +104,7 @@ Stage kernel (`stage.yml`) runs the same check with `--environment hf-staging --
 ## `verify_report.py`
 
 `summary <verify.json>` prints a verify job's summary. `stage` turns every GPU's
-report and each job's result into staging's "Hub staging" commit status and its pull
+report and each job's result into staging's "Hub staging (<kernel>)" commit status and its pull
 request comment. A verify report comes from a job that ran the pull request's tests, so
 only known fields are copied, each in an escaped, shortened code span.
 

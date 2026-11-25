@@ -1,9 +1,9 @@
 """Turn ci_verify_load.py's JSON reports into the text the workflows show.
 
   summary <verify.json>   the job summary of a verify job (publish.yml, stage.yml)
-  stage ...               stage.yml's result: the commit status ("Hub staging") and
-                          the pull request comment, from every GPU's report and the
-                          result of each job
+  stage ...               stage.yml's result: the commit status ("Hub staging
+                          (<kernel>)") and the pull request comment, from every GPU's
+                          report (verify-<arch>.json) and the result of each job
 
 A verify job runs the kernel's tests, which come from the pull request, so its report
 is only as trustworthy as Kernel CI's results: this reads known fields only, and puts
@@ -21,8 +21,13 @@ from pathlib import Path
 
 FIELDS = ("variant", "commit", "device", "torch", "hip", "kernels", "tests_exit")
 JOBS = ("target", "build", "upload", "download", "verify")
-STATUS_CONTEXT = "Hub staging"
 MAX_VALUE = 120
+
+
+def status_context(kernel: str) -> str:
+    """The commit status's name: one per kernel, so staging two kernels of one pull
+    request doesn't overwrite one result with the other."""
+    return f"Hub staging ({kernel})"
 
 
 def code(value: object, limit: int = MAX_VALUE) -> str:
@@ -42,13 +47,16 @@ def summary(report: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def load_reports(directory: Path, kernel: str, archs: list[str]) -> dict:
-    """Each GPU's report, from the verify-<kernel>-<arch> artifacts (None if absent)."""
+def load_reports(directory: Path, archs: list[str]) -> dict:
+    """Each GPU's report, verify-<arch>.json, anywhere below the downloaded artifacts
+    (None if absent). download-artifact puts each artifact in a directory of its own
+    only when it downloads more than one; with one GPU the report lands directly in
+    `directory`, so the file name, not the directory, says which GPU it is."""
     out = {}
     for arch in archs:
-        f = directory / f"verify-{kernel}-{arch}" / "verify.json"
+        found = sorted(directory.rglob(f"verify-{arch}.json"))
         try:
-            r = json.loads(f.read_text())
+            r = json.loads(found[0].read_text()) if found else None
             out[arch] = r if isinstance(r, dict) else None
         except (OSError, ValueError):
             out[arch] = None
@@ -149,7 +157,9 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         help="each job's result: the workflow's toJSON(needs), or {job: result}",
     )
-    st.add_argument("--reports", type=Path, required=True, help="verify-* artifacts")
+    st.add_argument(
+        "--reports", type=Path, required=True, help="where the verify-* artifacts are"
+    )
     st.add_argument("--status-json", type=Path, required=True)
     st.add_argument("--body", type=Path, required=True)
     args = ap.parse_args(argv)
@@ -167,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
         archs = [j["arch"] for j in json.loads(args.gpu_jobs or "[]")]
     except (ValueError, KeyError, TypeError):
         archs = []
-    reports = load_reports(args.reports, args.kernel, archs)
+    reports = load_reports(args.reports, archs)
     jobs = {
         k: v.get("result") if isinstance(v, dict) else v
         for k, v in json.loads(args.jobs).items()
@@ -175,14 +185,13 @@ def main(argv: list[str] | None = None) -> int:
     state, description, body = stage(
         args.kernel, args.sha, args.run_url, args.repo_id, args.branch, jobs, reports
     )
+    context = status_context(args.kernel)
     args.status_json.write_text(
-        json.dumps(
-            {"state": state, "description": description, "context": STATUS_CONTEXT}
-        )
+        json.dumps({"state": state, "description": description, "context": context})
         + "\n"
     )
     args.body.write_text(body)
-    print(f"{STATUS_CONTEXT}: {state}: {description}")
+    print(f"{context}: {state}: {description}")
     return 0
 
 

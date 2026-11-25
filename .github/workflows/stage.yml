@@ -14,7 +14,7 @@
 #             hf-staging approval gate (scripts/publish_gate.py); reads the
 #             kernel's build.toml from that commit, as data, with the trusted
 #             scripts/publish_target.py (runner labels come from main's
-#             ci/community.toml); sets the "Hub staging" status to pending
+#             ci/community.toml); sets the "Hub staging (<kernel>)" status to pending
 #   build     on each GPU, the pull request's code: every variant, check-abi and the
 #             GPU tests (rocm-build-test.yml, given the commit); no secrets
 #   upload    waits for approval in the hf-staging environment, then uploads that
@@ -26,7 +26,7 @@
 #   download  on a GitHub-hosted runner, the only job with the staging read token
 #   verify    on each GPU, no secrets: get_kernel() from the download in the user
 #             image (CI_USER_IMAGE), then the kernel's kernels_ci tests
-#   report    sets "Hub staging" to success or failure on the head commit and writes
+#   report    sets "Hub staging (<kernel>)" to success or failure on the head commit, and writes
 #             one comment on the pull request (scripts/verify_report.py); runs no
 #             pull request code
 #
@@ -161,12 +161,13 @@ jobs:
 
       - name: Mark the pull request as being staged
         env:
+          KERNEL: ${{ inputs.kernel }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ steps.pr.outputs.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          gh api "repos/$REPO/statuses/$SHA" -f state=pending -f context="Hub staging" \
+          gh api "repos/$REPO/statuses/$SHA" -f state=pending -f context="Hub staging ($KERNEL)" \
             -f description="Staging on the Hub (started by an AMD maintainer)" \
             -f target_url="$RUN_URL" > /dev/null
 
@@ -392,12 +393,13 @@ jobs:
           KERNELS_CACHE: ${{ runner.temp }}/kernels-cache
           HF_HOME: ${{ runner.temp }}/hf-home
           HF_HUB_OFFLINE: "1"
+          ARCH: ${{ matrix.arch }}
         run: |
           docker exec -i -e REPO_ID -e SOURCE_REPO_ID -e LOAD_ARGS -e CONFIG_DIR \
-            -e TRUST_REMOTE_CODE -e KERNELS_CACHE -e HF_HOME -e HF_HUB_OFFLINE \
+            -e TRUST_REMOTE_CODE -e KERNELS_CACHE -e HF_HOME -e HF_HUB_OFFLINE -e ARCH \
             -e RUNNER_TEMP -e GITHUB_WORKSPACE "$CI_CONTAINER" bash -e <<'BASH'
           read -ra load <<< "$LOAD_ARGS"
-          args=(--repo-id "$REPO_ID" "${load[@]}" --json "$RUNNER_TEMP/verify.json")
+          args=(--repo-id "$REPO_ID" "${load[@]}" --json "$RUNNER_TEMP/verify-$ARCH.json")
           if [ "$TRUST_REMOTE_CODE" = "true" ]; then
             args+=(--trust-remote-code)
           fi
@@ -412,10 +414,12 @@ jobs:
       # Python in the image: the runner itself may have none.
       - name: Write job summary
         if: always()
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
-          if [ -f "$RUNNER_TEMP/verify.json" ]; then
+          if [ -f "$RUNNER_TEMP/verify-$ARCH.json" ]; then
             docker exec "$CI_CONTAINER" python3 "$GITHUB_WORKSPACE/scripts/verify_report.py" \
-              summary "$RUNNER_TEMP/verify.json" >> "$GITHUB_STEP_SUMMARY"
+              summary "$RUNNER_TEMP/verify-$ARCH.json" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload verification report
@@ -425,7 +429,7 @@ jobs:
           name: verify-${{ inputs.kernel }}-${{ matrix.arch }}
           path: |
             ${{ runner.temp }}/download.json
-            ${{ runner.temp }}/verify.json
+            ${{ runner.temp }}/verify-${{ matrix.arch }}.json
           if-no-files-found: ignore
           retention-days: 14
 
@@ -444,7 +448,9 @@ jobs:
   report:
     name: Report on the pull request
     needs: [target, build, upload, download, verify]
-    if: always() && needs.target.outputs.sha != ''
+    # Not for a run that was cancelled, e.g. by a newer one for the same pull request
+    # and kernel: that one reports. A run cancelled by hand leaves the status pending.
+    if: ${{ !cancelled() && needs.target.outputs.sha != '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -479,7 +485,7 @@ jobs:
             --status-json "$RUNNER_TEMP/status.json" --body "$RUNNER_TEMP/comment.md"
           cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Set the "Hub staging" status
+      - name: Set the "Hub staging (<kernel>)" status
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

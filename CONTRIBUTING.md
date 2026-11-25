@@ -104,7 +104,7 @@ Before approving a kernel change, an AMD maintainer may also stage it on the Hub
 [Stage kernel](.github/workflows/stage.yml): your build is uploaded to a private
 staging repository, downloaded and loaded with `get_kernel()` as a user would, and its
 `kernels_ci` tests run again. The result appears on your pull request as a "Hub
-staging" check and a comment. You don't need to do anything, and your pull request
+staging (<kernel>)" check and a comment. You don't need to do anything, and your pull request
 doesn't wait for it to show green.
 
 Bump `version` in `build.toml` for any change to the public API, additions included
