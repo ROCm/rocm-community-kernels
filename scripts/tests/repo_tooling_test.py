@@ -237,6 +237,81 @@ def test_publish_gate_checks_the_upload_environment():
     assert f"/environments/{publish_gate.ENVIRONMENT}" in job_blocks(text)["target"]
 
 
+def test_publish_gate_other_environment(tmp_path):
+    """stage.yml checks hf-staging and HF_STAGING_TOKEN with the same rules."""
+    found = publish_gate.problems(None, True, "hf-staging", "HF_STAGING_TOKEN")
+    assert "HF_STAGING_TOKEN is visible" in found[0] and "hf-staging" in found[1]
+    env_json = tmp_path / "environment.json"
+    env_json.write_text(json.dumps(PROTECTED))
+    args = ["--environment-json", str(env_json), "--write-token-visible", "false"]
+    assert publish_gate.main(args + ["--environment", "hf-staging"]) == 0
+
+
+def test_publish_target_runners_come_from_the_trusted_config(tmp_path):
+    """stage.yml reads a pull request's kernel with --root: a ci/community.toml in
+    that tree must not choose the runners."""
+    add_kernel(tmp_path, "alpha")
+    (tmp_path / "ci").mkdir()
+    (tmp_path / "ci" / "community.toml").write_text(
+        '[ci-runners]\ngfx950 = "attacker-runner"\n'
+    )
+    t = publish_target.target(tmp_path, "alpha", "staging-org", "pr-7")
+    trusted = check_wrapping.load_community_rules()["ci-runners"]["gfx950"]
+    assert [j["runner"] for j in json.loads(t["gpu-jobs"])] == [trusted]
+    assert t["branch"] == "pr-7" and t["load-args"] == "--revision pr-7"
+    assert t["also-main"] == "false"
+
+
+def workflow_triggers(text: str) -> list[str]:
+    on = re.search(r"^on:\n((?:  .*\n|\n)*)", text, re.M)
+    return re.findall(r"^  ([a-z_]+):", on.group(1), re.M) if on else []
+
+
+def test_stage_is_started_by_hand_from_main():
+    """Only someone with write access can stage (workflow_dispatch), never a pull
+    request or a comment, and only main's reviewed workflow and scripts run it."""
+    text = (WORKFLOWS / "stage.yml").read_text()
+    assert workflow_triggers(text) == ["workflow_dispatch"]
+    target = job_blocks(text)["target"]
+    assert "if: github.ref != 'refs/heads/main'" in target
+    assert "exit 1" in target.split("Stage from main only", 1)[1].split("- name:")[0]
+
+
+def test_stage_tokens_and_permissions():
+    """The staging write token is used only in the upload job, which waits in the
+    hf-staging environment; the read token only in the download job; only target
+    and report can set statuses, and only report can comment."""
+    jobs = job_blocks((WORKFLOWS / "stage.yml").read_text())
+    for job, block in jobs.items():
+        write_uses = re.findall(r"secrets\.HF_STAGING_TOKEN\b(?! != '')", block)
+        read_uses = re.findall(r"secrets\.HF_STAGING_READ_TOKEN\b", block)
+        assert not write_uses or job == "upload", job
+        assert not read_uses or job == "download", job
+        assert "secrets.HF_TOKEN" not in block and "secrets.HF_READ_TOKEN" not in block
+        assert ("statuses: write" in block) == (job in ("target", "report")), job
+        assert ("pull-requests: write" in block) == (job == "report"), job
+    upload = jobs["upload"]
+    name = re.search(r"^    environment:\n      name: (\S+)$", upload, re.M)
+    assert name and name.group(1) == "hf-staging"
+    assert "/environments/hf-staging" in jobs["target"]
+    assert "--environment hf-staging --token-name HF_STAGING_TOKEN" in jobs["target"]
+    assert 'find "pr/$KERNEL" -type l' in upload  # no symlinks into the upload
+    assert "id-token" not in upload  # staging isn't signed
+
+
+def test_stage_reports_per_kernel_and_not_when_cancelled():
+    """Each kernel has its own status (as verify_report.status_context names it);
+    a run cancelled by a newer one doesn't overwrite that run's status."""
+    jobs = job_blocks((WORKFLOWS / "stage.yml").read_text())
+    assert 'context="Hub staging ($KERNEL)"' in jobs["target"]
+    report_if = re.search(r"^    if: (.*)$", jobs["report"], re.M)
+    assert report_if and "!cancelled()" in report_if.group(1)
+    assert "always()" not in report_if.group(1)
+    # the report file names carry the GPU (see verify_report.load_reports)
+    assert '--json "$RUNNER_TEMP/verify-$ARCH.json"' in jobs["verify"]
+    assert "${{ runner.temp }}/verify-${{ matrix.arch }}.json" in jobs["verify"]
+
+
 def test_kernel_builder_is_pinned():
     """The CI runs kernel-builder from the repository's flake.lock, never from the
     kernels default branch (the upload runs it with the Hub write token)."""

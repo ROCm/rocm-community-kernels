@@ -10,6 +10,7 @@ The CI itself:
 | Workflow                                              | When                    | What                                                                                                                                                                                                                             |
 | ----------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`kernel-ci.yml`](../.github/workflows/kernel-ci.yml) | every pull request      | the CI scripts' unit tests, and `scripts/kernel_ci.py` for each changed kernel: validate, then build one variant and run the `kernels_ci` tests on the MI350 ([`rocm-build-test.yml`](../.github/workflows/rocm-build-test.yml)) |
+| [`stage.yml`](../.github/workflows/stage.yml)         | on request, from `main` | for one pull request's kernel: build every variant, approval, upload privately to the staging organisation, then `get_kernel()` from there and test; reports "Hub staging (<kernel>)" and a comment on the pull request          |
 | [`publish.yml`](../.github/workflows/publish.yml)     | on request, from `main` | build every variant and test it, approval, sign and upload, then `get_kernel()` from the Hub and test again                                                                                                                      |
 | [`ci-image.yml`](../.github/workflows/ci-image.yml)   | changes to `ci/docker/` | build the CI image; from `main` (and `ci_setup` until the CI is merged into `main`), push it as `latest`, the tag the GPU jobs run                                                                                               |
 | [`nix-fmt.yml`](../.github/workflows/nix-fmt.yml)     | changes to `.nix` files | `nix fmt` check                                                                                                                                                                                                                  |
@@ -42,6 +43,26 @@ In this order, before `HF_TOKEN` exists anywhere and before `publish.yml` reache
 1. Set the repository variables `HUB_ORG` (the organisation to publish to) and
    `CI_USER_IMAGE` (a ROCm PyTorch image whose Torch and ROCm versions match a variant
    the build makes).
+
+### Staging
+
+Stage kernel ([`stage.yml`](../.github/workflows/stage.yml)) lets an AMD maintainer
+check a pull request's kernel on the Hub before approving it: upload, download,
+`get_kernel()` and the tests, in a staging organisation. Starting it needs write access
+to the repository, so contributors can't, and their pull requests don't wait for it.
+It checks steps 1 and 2 before it builds anything, as publishing does.
+
+1. Create the `hf-staging` environment, with the same required reviewers and `main`
+   only.
+1. Add `HF_STAGING_TOKEN`, a Hub write token for the staging organisation, as a secret
+   of that environment only.
+1. Add `HF_STAGING_READ_TOKEN`, a read-only token for the staging organisation, as a
+   repository secret.
+1. Set the repository variable `HUB_STAGING_ORG` (the staging organisation). It uses
+   `CI_USER_IMAGE` too.
+
+Each pull request goes to its own branch, `pr-<number>`, of `<HUB_STAGING_ORG>/<name>`,
+created private. Delete staged repositories or branches when you no longer need them.
 
 ### Pull requests
 

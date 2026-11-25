@@ -100,13 +100,20 @@ also need its maintainers' agreement on the pull request; AMD reviewers check fo
 AMD's review checks the community rules and safety; it is not a quality or support
 commitment.
 
+Before approving a kernel change, an AMD maintainer may also stage it on the Hub with
+[Stage kernel](.github/workflows/stage.yml): your build is uploaded to a private
+staging repository, downloaded and loaded with `get_kernel()` as a user would, and its
+`kernels_ci` tests run again. The result appears on your pull request as a "Hub
+staging (<kernel>)" check and a comment. You don't need to do anything, and your pull request
+doesn't wait for it to show green.
+
 Bump `version` in `build.toml` for any change to the public API, additions included
 ([AGENTS.md](AGENTS.md#kernel-versions)).
 
 ## Publishing
 
 Nothing is published automatically. When a kernel is ready, its maintainers ask for a
-release in an issue or on their pull request. An AMD maintainer then runs
+release in an issue or on their pull request. Once it is merged, an AMD maintainer runs
 [Publish kernel](.github/workflows/publish.yml). It builds every variant on an AMD GPU
 and runs the tests, then waits for an AMD maintainer to approve the upload. After
 approval it signs each variant and uploads it to the Hub, to branch `v<version>`. It
