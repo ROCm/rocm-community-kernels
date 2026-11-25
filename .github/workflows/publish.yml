@@ -26,7 +26,9 @@
 #            is imported), checks each variant's metadata.json was signed by this
 #            workflow on main, and passes the download on as an artifact
 #   verify   on each of those GPUs, with no secrets, in what a user has: a ROCm PyTorch image
-#            (the CI_USER_IMAGE variable) plus `kernels` and pytest, no Nix. Its
+#            (the CI_USER_IMAGE variable) plus `kernels` and pytest, no Nix, started
+#            with `docker run` and used with `docker exec` as in rocm-build-test.yml
+#            (actions run on the runner itself). Its
 #            Torch and ROCm must match a variant the build makes. `get_kernel()`
 #            loads the kernel offline from the download, and the kernel's
 #            `kernels_ci` tests run on it
@@ -299,11 +301,6 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.target.outputs.gpu-jobs) }}
     runs-on: ${{ matrix.runner }}
-    # A ROCm PyTorch image matching a built variant (see the header). An unset
-    # variable fails the pull with this name.
-    container:
-      image: ${{ vars.CI_USER_IMAGE || 'set-the-CI_USER_IMAGE-repository-variable' }}
-      options: --device /dev/kfd --device /dev/dri --group-add video
     timeout-minutes: 60
     permissions:
       contents: read
@@ -313,21 +310,43 @@ jobs:
         with:
           persist-credentials: false
 
+      # A ROCm PyTorch image matching a built variant (see the header). An unset
+      # variable fails the pull with this name. The GPU devices, root and the
+      # workspace are handled as in rocm-build-test.yml.
+      - name: Start the user's container
+        env:
+          IMAGE: ${{ vars.CI_USER_IMAGE || 'set-the-CI_USER_IMAGE-repository-variable' }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          if [ -f /etc/podinfo/gha-render-devices ]; then
+            DEVICE_FLAG=$(cat /etc/podinfo/gha-render-devices)
+          else
+            DEVICE_FLAG="--device /dev/dri"
+          fi
+          name="rck-verify-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$ARCH"
+          # shellcheck disable=SC2086 # DEVICE_FLAG holds one or more --device options
+          docker run -dt --pull always --name "$name" \
+            --device /dev/kfd $DEVICE_FLAG --group-add video \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -v "$RUNNER_TEMP:$RUNNER_TEMP" \
+            -w "$GITHUB_WORKSPACE" "$IMAGE"
+          echo "CI_CONTAINER=$name" >> "$GITHUB_ENV"
+          docker exec "$name" git config --global --add safe.directory '*'
+
       # What a user has: the image's PyTorch for ROCm, plus `kernels` (with
       # huggingface_hub) and pytest. No Nix, no build. Installed into the image's own
       # Python, where its torch is (a new venv wouldn't see it); the container is
       # discarded after the job.
       - name: Add kernels and pytest to the image's PyTorch
-        env:
-          PIP_BREAK_SYSTEM_PACKAGES: "1"
         run: |
-          python3 -m pip install kernels pytest
+          docker exec -i -e PIP_BREAK_SYSTEM_PACKAGES=1 "$CI_CONTAINER" bash -e <<'BASH'
+          python3 -m pip install kernels pytest < /dev/null
           python3 - <<'EOF'
           import sys, torch
           print("torch", torch.__version__, "hip", torch.version.hip)
           if not torch.version.hip:
               sys.exit("torch has no ROCm: is CI_USER_IMAGE a ROCm PyTorch image?")
           EOF
+          BASH
 
       - name: Fetch the download
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -349,6 +368,9 @@ jobs:
           HF_HOME: ${{ runner.temp }}/hf-home
           HF_HUB_OFFLINE: "1"
         run: |
+          docker exec -i -e REPO_ID -e SOURCE_REPO_ID -e LOAD_ARGS -e CONFIG_DIR \
+            -e TRUST_REMOTE_CODE -e KERNELS_CACHE -e HF_HOME -e HF_HUB_OFFLINE \
+            -e RUNNER_TEMP -e GITHUB_WORKSPACE "$CI_CONTAINER" bash -e <<'BASH'
           read -ra load <<< "$LOAD_ARGS"
           args=(--repo-id "$REPO_ID" "${load[@]}" --json "$RUNNER_TEMP/verify.json")
           if [ "$TRUST_REMOTE_CODE" = "true" ]; then
@@ -358,13 +380,17 @@ jobs:
             args+=(--tests "$PWD/$CONFIG_DIR/tests" --tests-repo-id "$SOURCE_REPO_ID")
           fi
           cd "$CONFIG_DIR"
-          python3 "$GITHUB_WORKSPACE/scripts/ci_verify_load.py" "${args[@]}"
+          # stdin is this script: keep the kernel's code from reading it.
+          python3 "$GITHUB_WORKSPACE/scripts/ci_verify_load.py" "${args[@]}" < /dev/null
+          BASH
 
+      # Python in the image: the runner itself may have none.
       - name: Write job summary
         if: always()
         run: |
           if [ -f "$RUNNER_TEMP/verify.json" ]; then
-            python3 - "$RUNNER_TEMP/verify.json" >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+            docker exec -i "$CI_CONTAINER" python3 - "$RUNNER_TEMP/verify.json" \
+              >> "$GITHUB_STEP_SUMMARY" <<'EOF'
           import json, sys
           r = json.load(open(sys.argv[1]))
           print(f"### get_kernel(\"{r['repo_id']}\") from the Hub: {'passed' if r['ok'] else 'FAILED'}\n")
@@ -384,3 +410,15 @@ jobs:
             ${{ runner.temp }}/verify.json
           if-no-files-found: ignore
           retention-days: 30
+
+      # As in rocm-build-test.yml: hand the files back to the runner's user, writable,
+      # then remove the container.
+      - name: Remove the user's container
+        if: always()
+        run: |
+          if [ -n "${CI_CONTAINER:-}" ]; then
+            docker exec "$CI_CONTAINER" chmod -R u+w "$GITHUB_WORKSPACE" "$RUNNER_TEMP" || true
+            docker exec "$CI_CONTAINER" \
+              chown -hR "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$RUNNER_TEMP" || true
+            docker rm -f "$CI_CONTAINER" || true
+          fi
