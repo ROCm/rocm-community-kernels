@@ -57,11 +57,20 @@ def test_stage_failed_job():
 
 
 def test_stage_failed_or_missing_report():
-    state, description, body = stage(reports={"gfx950": {**PASSED, "ok": False}})
-    assert state == "failure" and "gfx950" in description
-    state, _, body = stage(reports={"gfx950": None})
+    # As it happens: a GPU's failing report also fails the verify job.
+    verify_failed = {**ALL_JOBS, "verify": "failure"}
+    reports = {"gfx950": PASSED, "gfx942": {**PASSED, "ok": False}}
+    state, description, _ = stage(jobs=verify_failed, reports=reports)
+    assert state == "failure"
+    assert description == "get_kernel() or tests failed: gfx942"
+    state, _, body = stage(jobs=verify_failed, reports={"gfx950": None})
     assert state == "failure" and "no report" in body
-    assert stage(reports={})[0] == "failure"
+    # verify failed with every report passing (e.g. the job broke afterwards)
+    assert stage(jobs=verify_failed)[1] == "failed at verify (failure)"
+    # an earlier job failed: that's the cause, whatever the reports say
+    jobs = {**ALL_JOBS, "download": "failure", "verify": "skipped"}
+    assert stage(jobs=jobs, reports=reports)[1] == "failed at download (failure)"
+    assert stage(reports={})[:2] == ("failure", "no verify report")
 
 
 def test_report_text_cannot_add_markup():

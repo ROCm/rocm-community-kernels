@@ -84,10 +84,14 @@ def stage(
         )
     else:
         state = "failure"
-        if failed:
+        # A GPU whose report failed also fails its verify job, so when verify is the
+        # only failed job, name the GPUs instead.
+        if bad_gpus and failed in ([], ["verify"]):
+            description = f"get_kernel() or tests failed: {', '.join(bad_gpus)}"
+        elif failed:
             description = f"failed at {failed[0]} ({jobs.get(failed[0]) or 'not run'})"
         else:
-            description = f"get_kernel() or tests failed: {', '.join(bad_gpus)}"
+            description = "no verify report"
 
     lines = [
         f"<!-- hub-staging:{kernel} -->",
