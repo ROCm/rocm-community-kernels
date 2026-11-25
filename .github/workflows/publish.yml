@@ -389,15 +389,8 @@ jobs:
         if: always()
         run: |
           if [ -f "$RUNNER_TEMP/verify.json" ]; then
-            docker exec -i "$CI_CONTAINER" python3 - "$RUNNER_TEMP/verify.json" \
-              >> "$GITHUB_STEP_SUMMARY" <<'EOF'
-          import json, sys
-          r = json.load(open(sys.argv[1]))
-          print(f"### get_kernel(\"{r['repo_id']}\") from the Hub: {'passed' if r['ok'] else 'FAILED'}\n")
-          for k in ("variant", "commit", "device", "torch", "hip", "kernels", "tests_exit", "error"):
-              if r.get(k) is not None:
-                  print(f"- **{k}**: `{r[k]}`")
-          EOF
+            docker exec "$CI_CONTAINER" python3 "$GITHUB_WORKSPACE/scripts/verify_report.py" \
+              summary "$RUNNER_TEMP/verify.json" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload verification report

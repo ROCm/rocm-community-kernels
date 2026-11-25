@@ -6,12 +6,13 @@ The scripts the CI (the GitHub workflows) runs. Contributors can run them locall
 | ----------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------- |
 | `kernel_ci.py`          | Runs the pull request stages for kernels: validate, build, GPU test                | `kernel-ci.yml`, `rocm-build-test.yml`, contributors |
 | `check_wrapping.py`     | Checks a kernel is packaged correctly for kernel-builder, plus the community rules | `kernel_ci.py` (validate stage), contributors        |
-| `ci_verify_load.py`     | Loads a kernel with `get_kernel()` as a user would, then runs its tests            | `publish.yml` (verify job)                           |
+| `ci_verify_load.py`     | Loads a kernel with `get_kernel()` as a user would, then runs its tests            | `publish.yml`, `stage.yml` (verify job)              |
 | `changed_kernels.py`    | Lists the kernels a pull request changes, and the GPU jobs for them                | `kernel-ci.yml`, `publish_target.py`                 |
 | `kernel_maintainers.py` | Checks the kernel maintainers registry                                             | `kernel-ci.yml`                                      |
-| `publish_target.py`     | Works out where a publish uploads to, and how to load it back                      | `publish.yml`                                        |
-| `publish_gate.py`       | Checks the publish approval gate (environment, reviewers, token) is in place       | `publish.yml` (target job)                           |
-| `ci_download.py`        | Downloads a published kernel without loading it                                    | `publish.yml` (download job)                         |
+| `publish_target.py`     | Works out where a publish uploads to, and how to load it back                      | `publish.yml`, `stage.yml`                           |
+| `publish_gate.py`       | Checks an upload's approval gate (environment, reviewers, token) is in place       | `publish.yml`, `stage.yml` (target job)              |
+| `ci_download.py`        | Downloads a published kernel without loading it                                    | `publish.yml`, `stage.yml` (download job)            |
+| `verify_report.py`      | Turns verify reports into the job summary, and staging's status and PR comment     | `publish.yml`, `stage.yml`                           |
 | `tests/`                | Unit tests for the scripts above, and checks on the workflows                      | `kernel-ci.yml`, on every pull request               |
 
 ## `kernel_ci.py`
@@ -98,6 +99,15 @@ exists with required reviewers and a branch limit, and `HF_TOKEN` is a secret of
 environment only (a repository or organisation secret would let the upload run without
 approval). See Repository setup in [`ci/README.md`](../ci/README.md).
 
+Stage kernel (`stage.yml`) runs the same check with `--environment hf-staging --token-name HF_STAGING_TOKEN`.
+
+## `verify_report.py`
+
+`summary <verify.json>` prints a verify job's summary. `stage` turns every GPU's
+report and each job's result into staging's "Hub staging" commit status and its pull
+request comment. A verify report comes from a job that ran the pull request's tests, so
+only known fields are copied, each in an escaped, shortened code span.
+
 ## `changed_kernels.py`
 
 Prints the changed kernels as JSON (with `--github-output`, also for the workflow). A
@@ -143,12 +153,13 @@ python3 scripts/publish_target.py <kernel> --hub-org <test-org>
 
 No GPU, Nix or network needed.
 
-| File                     | Covers                                                                                                                                                                                                               |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `check_wrapping_test.py` | Each wrapping and community rule, on small generated kernels                                                                                                                                                         |
-| `kernel_ci_test.py`      | GPU-architecture skipping, `--fail-on-skip`, build concurrency, expected results, no Hub token in commands                                                                                                           |
-| `repo_tooling_test.py`   | `changed_kernels.py` on a real git history, the maintainers check, `publish_target.py`, `publish_gate.py`; the workflows: uploads are private, GPU jobs run in a container with no secrets, kernel-builder is pinned |
-| `ci_verify_load_test.py` | `--tests-repo-id` with the real `kernels` loader (skipped without PyTorch and `kernels`)                                                                                                                             |
+| File                     | Covers                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `check_wrapping_test.py` | Each wrapping and community rule, on small generated kernels                                                                                                                                                                                                                                                                                                   |
+| `kernel_ci_test.py`      | GPU-architecture skipping, `--fail-on-skip`, build concurrency, expected results, no Hub token in commands                                                                                                                                                                                                                                                     |
+| `repo_tooling_test.py`   | `changed_kernels.py` on a real git history, the maintainers check, `publish_target.py` (runner labels from the trusted config), `publish_gate.py`; the workflows: uploads are private, GPU jobs run in a container with no secrets, kernel-builder is pinned, Stage kernel is started by hand from `main` and keeps its tokens to its upload and download jobs |
+| `verify_report_test.py`  | The verify summary, staging's status and comment, and that report text can't add markup to the comment                                                                                                                                                                                                                                                         |
+| `ci_verify_load_test.py` | `--tests-repo-id` with the real `kernels` loader (skipped without PyTorch and `kernels`)                                                                                                                                                                                                                                                                       |
 
 ```bash
 python3 -m pytest scripts/tests

@@ -1,0 +1,510 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+#
+# Stages a pull request's kernel on the Hub before it is merged, so an AMD maintainer
+# can check the Hub half of publishing that Kernel CI doesn't cover: what
+# kernel-builder uploads, get_kernel() resolving a Hub branch, the download, and
+# loading in a plain user image with no Nix. Run by hand (Actions > Stage kernel),
+# which needs write access to the repository: community contributors can't start it,
+# and their pull request checks don't wait for it. The merge is gated by the required
+# AMD review, not by this.
+#
+#   target    from main only (the reviewed workflow and scripts): resolves the pull
+#             request's head commit, which every later job uses; checks the
+#             hf-staging approval gate (scripts/publish_gate.py); reads the
+#             kernel's build.toml from that commit, as data, with the trusted
+#             scripts/publish_target.py (runner labels come from main's
+#             ci/community.toml); sets the "Hub staging" status to pending
+#   build     on each GPU, the pull request's code: every variant, check-abi and the
+#             GPU tests (rocm-build-test.yml, given the commit); no secrets
+#   upload    waits for approval in the hf-staging environment, then uploads that
+#             build privately to <HUB_STAGING_ORG>/<name>, branch pr-<number>, with
+#             kernel-builder from main's flake.lock. Holds the staging write token;
+#             reads the pull request's kernel directory as files and runs none of it
+#             (kernel-builder upload only reads build.toml, build/ and benchmarks/).
+#             Not signed: only publish.yml signs
+#   download  on a GitHub-hosted runner, the only job with the staging read token
+#   verify    on each GPU, no secrets: get_kernel() from the download in the user
+#             image (CI_USER_IMAGE), then the kernel's kernels_ci tests
+#   report    sets "Hub staging" to success or failure on the head commit and writes
+#             one comment on the pull request (scripts/verify_report.py); runs no
+#             pull request code
+#
+# The verify job runs the pull request's tests, so its report is as trustworthy as
+# Kernel CI's results; verify_report.py only copies known fields, escaped. After
+# merge, publish.yml publishes the kernel for real: rebuilt from main, signed, and
+# approved in hf-rocm-community.
+
+name: Stage kernel
+run-name: Stage ${{ inputs.kernel }} from pull request ${{ inputs.pr }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+        type: string
+      kernel:
+        description: Kernel directory to stage
+        required: true
+        type: string
+      trust_remote_code:
+        description: Load with trust_remote_code (the staging organisation isn't a trusted publisher)
+        required: false
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.pr }}-${{ inputs.kernel }}
+  cancel-in-progress: true
+
+jobs:
+  target:
+    name: Resolve the pull request and target
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read # read the environment's protection rules
+      pull-requests: read
+      statuses: write
+    outputs:
+      sha: ${{ steps.pr.outputs.sha }}
+      repo-id: ${{ steps.target.outputs.repo-id }}
+      source-repo-id: ${{ steps.target.outputs.source-repo-id }}
+      branch: ${{ steps.target.outputs.branch }}
+      load-args: ${{ steps.target.outputs.load-args }}
+      config-dir: ${{ steps.target.outputs.config-dir }}
+      gpu-jobs: ${{ steps.target.outputs.gpu-jobs }}
+      build-arch: ${{ steps.target.outputs.build-arch }}
+    steps:
+      - name: Stage from main only
+        if: github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::Run Stage kernel from main (the reviewed workflow and scripts); this run is on $REF"
+          exit 1
+
+      - name: Validate the inputs
+        env:
+          PR: ${{ inputs.pr }}
+          KERNEL: ${{ inputs.kernel }}
+        run: |
+          if ! [[ "$PR" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::pr must be a pull request number"
+            exit 1
+          fi
+          case "$KERNEL" in
+            ''|*[!A-Za-z0-9_-]*)
+              echo "::error::Invalid kernel name: must match ^[A-Za-z0-9_-]+$"
+              exit 1
+              ;;
+          esac
+
+      # Every later job uses this commit, so a push during the run doesn't mix commits.
+      - name: Resolve the pull request's head commit
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+        run: |
+          read -r state sha < <(gh api "repos/$REPO/pulls/$PR" --jq '.state + " " + .head.sha')
+          if [ "$state" != "open" ] || ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Pull request $PR isn't open (state: ${state:-not found})"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Staging pull request $PR at $sha"
+
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Read as data only: nothing from it runs in this job.
+      - name: Checkout the pull request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.pr.outputs.sha }}
+          path: pr
+          persist-credentials: false
+
+      # As publish.yml's gate, for hf-staging and HF_STAGING_TOKEN.
+      - name: Check the approval gate is in place
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WRITE_TOKEN_VISIBLE: ${{ secrets.HF_STAGING_TOKEN != '' }}
+        run: |
+          env_json="$RUNNER_TEMP/environment.json"
+          if ! gh api "repos/$REPO/environments/hf-staging" > "$env_json"; then
+            rm -f "$env_json"
+          fi
+          python3 scripts/publish_gate.py --environment-json "$env_json" \
+            --write-token-visible "$WRITE_TOKEN_VISIBLE" \
+            --environment hf-staging --token-name HF_STAGING_TOKEN
+
+      - name: Resolve the staging repository and branch
+        id: target
+        env:
+          KERNEL: ${{ inputs.kernel }}
+          PR: ${{ inputs.pr }}
+          HUB_ORG: ${{ vars.HUB_STAGING_ORG }}
+        run: |
+          python3 scripts/publish_target.py "$KERNEL" --root pr --hub-org "$HUB_ORG" \
+            --branch "pr-$PR" --github-output
+
+      - name: Mark the pull request as being staged
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ steps.pr.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api "repos/$REPO/statuses/$SHA" -f state=pending -f context="Hub staging" \
+            -f description="Staging on the Hub (started by an AMD maintainer)" \
+            -f target_url="$RUN_URL" > /dev/null
+
+  build:
+    name: Build every variant
+    needs: target
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.target.outputs.gpu-jobs) }}
+    uses: ./.github/workflows/rocm-build-test.yml
+    with:
+      kernel: ${{ inputs.kernel }}
+      arch: ${{ matrix.arch }}
+      runner: ${{ matrix.runner }}
+      variants: all
+      # Every GPU builds and tests; one build is uploaded.
+      keep-build: ${{ matrix.arch == needs.target.outputs.build-arch }}
+      ref: ${{ needs.target.outputs.sha }}
+
+  upload:
+    name: Upload to the staging organisation
+    needs: [target, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment:
+      name: hf-staging
+      url: https://huggingface.co/${{ needs.target.outputs.repo-id }}/tree/${{ needs.target.outputs.branch }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The kernel's build.toml, CARD and benchmarks, uploaded as files; nothing in it runs.
+      - name: Checkout the pull request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.target.outputs.sha }}
+          path: pr
+          persist-credentials: false
+
+      # A symlink could point the upload at a file on this runner.
+      - name: Refuse symlinks in the kernel directory
+        env:
+          KERNEL: ${{ inputs.kernel }}
+        run: |
+          links=$(find "pr/$KERNEL" -type l)
+          if [ -n "$links" ]; then
+            echo "::error::The kernel directory has symlinks, which staging doesn't upload: $links"
+            exit 1
+          fi
+
+      - name: Download build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: build-${{ inputs.kernel }}
+          path: pr/${{ inputs.kernel }}/build
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Use the Hugging Face binary cache
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
+        with:
+          name: huggingface
+        env:
+          USER: runner
+
+      - name: Upload kernel to the staging organisation
+        env:
+          HF_TOKEN: ${{ secrets.HF_STAGING_TOKEN }}
+          KERNEL: ${{ inputs.kernel }}
+          REPO_ID: ${{ needs.target.outputs.repo-id }}
+          BRANCH: ${{ needs.target.outputs.branch }}
+        # kernel-builder from main's flake.lock: it runs with the write token. pr/ isn't
+        # tracked in main's checkout, so it isn't part of that flake.
+        run: |
+          cd "pr/$KERNEL"
+          nix run -L "$GITHUB_WORKSPACE#kernel-builder" -- upload \
+            --repo-type kernel --repo-id "$REPO_ID" --branch "$BRANCH" --private \
+            --output-json "$RUNNER_TEMP/upload.json"
+
+      - name: Upload Hub upload summary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hub-upload-${{ inputs.kernel }}
+          path: ${{ runner.temp }}/upload.json
+          retention-days: 14
+
+  # The read token stays on a GitHub-hosted runner: the GPU runners also run pull
+  # request code, so no secret goes there.
+  download:
+    name: Download from the staging organisation
+    needs: [target, upload]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      # huggingface_hub, at the version the kernels loader uses.
+      - name: Install kernels
+        run: python -m pip install kernels
+
+      # Nothing from the kernel is imported. Staged repositories are private.
+      - name: Download the kernel (read-only token)
+        env:
+          HF_TOKEN: ${{ secrets.HF_STAGING_READ_TOKEN }}
+          HF_HOME: ${{ runner.temp }}/hf-home
+          REPO_ID: ${{ needs.target.outputs.repo-id }}
+          BRANCH: ${{ needs.target.outputs.branch }}
+          KERNELS_CACHE: ${{ runner.temp }}/kernels-cache
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "::error::Set the HF_STAGING_READ_TOKEN secret (a read-only Hugging Face token for the staging organisation)"
+            exit 1
+          fi
+          python scripts/ci_download.py \
+            --repo-id "$REPO_ID" --revision "$BRANCH" --json "$RUNNER_TEMP/download.json"
+
+      # A tarball keeps the cache's symlinks, which artifacts don't.
+      - name: Pack the download
+        run: tar -C "$RUNNER_TEMP" -cf "$RUNNER_TEMP/kernels-cache.tar" kernels-cache
+
+      - name: Upload the download
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hub-download-${{ inputs.kernel }}
+          path: |
+            ${{ runner.temp }}/kernels-cache.tar
+            ${{ runner.temp }}/download.json
+          if-no-files-found: error
+          retention-days: 1
+
+  verify:
+    name: Load from the staging organisation and test (${{ matrix.arch }})
+    needs: [target, download]
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.target.outputs.gpu-jobs) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The kernel's tests.
+      - name: Checkout the pull request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.target.outputs.sha }}
+          path: pr
+          persist-credentials: false
+
+      # The user image, as in publish.yml's verify job.
+      - name: Start the user's container
+        env:
+          IMAGE: ${{ vars.CI_USER_IMAGE || 'set-the-CI_USER_IMAGE-repository-variable' }}
+          KERNEL: ${{ inputs.kernel }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          if [ -f /etc/podinfo/gha-render-devices ]; then
+            DEVICE_FLAG=$(cat /etc/podinfo/gha-render-devices)
+          else
+            DEVICE_FLAG="--device /dev/dri"
+          fi
+          name="rck-stage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$KERNEL-$ARCH"
+          # shellcheck disable=SC2086 # DEVICE_FLAG holds one or more --device options
+          docker run -dt --pull always --name "$name" \
+            --device /dev/kfd $DEVICE_FLAG --group-add video \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -v "$RUNNER_TEMP:$RUNNER_TEMP" \
+            -w "$GITHUB_WORKSPACE" "$IMAGE"
+          echo "CI_CONTAINER=$name" >> "$GITHUB_ENV"
+          docker exec "$name" git config --global --add safe.directory '*'
+
+      - name: Add kernels and pytest to the image's PyTorch
+        run: |
+          docker exec -i -e PIP_BREAK_SYSTEM_PACKAGES=1 "$CI_CONTAINER" bash -e <<'BASH'
+          python3 -m pip install kernels pytest < /dev/null
+          python3 - <<'EOF'
+          import sys, torch
+          print("torch", torch.__version__, "hip", torch.version.hip)
+          if not torch.version.hip:
+              sys.exit("torch has no ROCm: is CI_USER_IMAGE a ROCm PyTorch image?")
+          EOF
+          BASH
+
+      - name: Fetch the download
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hub-download-${{ inputs.kernel }}
+          path: ${{ runner.temp }}
+
+      - name: Unpack the download
+        run: tar -C "$RUNNER_TEMP" -xf "$RUNNER_TEMP/kernels-cache.tar"
+
+      - name: get_kernel() from the download, then the kernels_ci tests
+        env:
+          REPO_ID: ${{ needs.target.outputs.repo-id }}
+          SOURCE_REPO_ID: ${{ needs.target.outputs.source-repo-id }}
+          LOAD_ARGS: ${{ needs.target.outputs.load-args }}
+          CONFIG_DIR: pr/${{ needs.target.outputs.config-dir }}
+          TRUST_REMOTE_CODE: ${{ inputs.trust_remote_code }}
+          KERNELS_CACHE: ${{ runner.temp }}/kernels-cache
+          HF_HOME: ${{ runner.temp }}/hf-home
+          HF_HUB_OFFLINE: "1"
+        run: |
+          docker exec -i -e REPO_ID -e SOURCE_REPO_ID -e LOAD_ARGS -e CONFIG_DIR \
+            -e TRUST_REMOTE_CODE -e KERNELS_CACHE -e HF_HOME -e HF_HUB_OFFLINE \
+            -e RUNNER_TEMP -e GITHUB_WORKSPACE "$CI_CONTAINER" bash -e <<'BASH'
+          read -ra load <<< "$LOAD_ARGS"
+          args=(--repo-id "$REPO_ID" "${load[@]}" --json "$RUNNER_TEMP/verify.json")
+          if [ "$TRUST_REMOTE_CODE" = "true" ]; then
+            args+=(--trust-remote-code)
+          fi
+          if [ -d "$CONFIG_DIR/tests" ]; then
+            args+=(--tests "$PWD/$CONFIG_DIR/tests" --tests-repo-id "$SOURCE_REPO_ID")
+          fi
+          cd "$CONFIG_DIR"
+          # stdin is this script: keep the kernel's code from reading it.
+          python3 "$GITHUB_WORKSPACE/scripts/ci_verify_load.py" "${args[@]}" < /dev/null
+          BASH
+
+      # Python in the image: the runner itself may have none.
+      - name: Write job summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/verify.json" ]; then
+            docker exec "$CI_CONTAINER" python3 "$GITHUB_WORKSPACE/scripts/verify_report.py" \
+              summary "$RUNNER_TEMP/verify.json" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verify-${{ inputs.kernel }}-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/download.json
+            ${{ runner.temp }}/verify.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # As in rocm-build-test.yml: hand the files back to the runner's user, writable,
+      # then remove the container.
+      - name: Remove the user's container
+        if: always()
+        run: |
+          if [ -n "${CI_CONTAINER:-}" ]; then
+            docker exec "$CI_CONTAINER" chmod -R u+w "$GITHUB_WORKSPACE" "$RUNNER_TEMP" || true
+            docker exec "$CI_CONTAINER" \
+              chown -hR "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$RUNNER_TEMP" || true
+            docker rm -f "$CI_CONTAINER" || true
+          fi
+
+  report:
+    name: Report on the pull request
+    needs: [target, build, upload, download, verify]
+    if: always() && needs.target.outputs.sha != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      statuses: write
+      pull-requests: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch the verification reports
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: verify-${{ inputs.kernel }}-*
+          path: ${{ runner.temp }}/reports
+
+      - name: Write the status and comment
+        env:
+          KERNEL: ${{ inputs.kernel }}
+          SHA: ${{ needs.target.outputs.sha }}
+          REPO_ID: ${{ needs.target.outputs.repo-id }}
+          BRANCH: ${{ needs.target.outputs.branch }}
+          GPU_JOBS: ${{ needs.target.outputs.gpu-jobs }}
+          JOBS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 scripts/verify_report.py stage --kernel "$KERNEL" --sha "$SHA" \
+            --run-url "$RUN_URL" --repo-id "$REPO_ID" --branch "$BRANCH" \
+            --gpu-jobs "$GPU_JOBS" --jobs "$JOBS" --reports "$RUNNER_TEMP/reports" \
+            --status-json "$RUNNER_TEMP/status.json" --body "$RUNNER_TEMP/comment.md"
+          cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set the "Hub staging" status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ needs.target.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          status="$RUNNER_TEMP/status.json"
+          gh api "repos/$REPO/statuses/$SHA" \
+            -f state="$(jq -r .state "$status")" -f context="$(jq -r .context "$status")" \
+            -f description="$(jq -r .description "$status")" -f target_url="$RUN_URL" > /dev/null
+
+      # One comment per kernel, updated in place on each run.
+      - name: Comment on the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+          KERNEL: ${{ inputs.kernel }}
+        run: |
+          marker="<!-- hub-staging:$KERNEL -->"
+          id=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" \
+            | head -n 1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@"$RUNNER_TEMP/comment.md" > /dev/null
+          else
+            gh api "repos/$REPO/issues/$PR/comments" -F body=@"$RUNNER_TEMP/comment.md" > /dev/null
+          fi
