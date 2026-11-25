@@ -120,6 +120,7 @@ jobs:
       - name: Start the CI container
         env:
           IMAGE: ghcr.io/rocm/rocm-community-kernels-ci:latest # zizmor: ignore[unpinned-images] only main pushes latest
+          KERNEL: ${{ inputs.kernel }}
           ARCH: ${{ inputs.arch }}
         run: |
           if [ -f /etc/podinfo/gha-render-devices ]; then
@@ -127,7 +128,8 @@ jobs:
           else
             DEVICE_FLAG="--device /dev/dri"
           fi
-          name="rck-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$ARCH"
+          # One job per kernel and GPU in a run: unique, if runners share a Docker daemon.
+          name="rck-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$KERNEL-$ARCH"
           # shellcheck disable=SC2086 # DEVICE_FLAG holds one or more --device options
           docker run -dt --pull always --name "$name" \
             --device /dev/kfd $DEVICE_FLAG --group-add video \
@@ -152,14 +154,15 @@ jobs:
 
       # validate (wrapping and community rules, kernel-builder check-config),
       # build (nix build, check-abi), test (nix build the ROCm 7.1 .#ciTests.<variant>,
-      # run it on the GPU).
+      # run it on the GPU). GITHUB_ACTIONS turns on kernel_ci.py's ::error and ::warning
+      # annotations; docker exec passes only the variables it is given.
       - name: Build and test
         env:
           KERNEL: ${{ inputs.kernel }}
           VARIANTS: ${{ inputs.variants }}
           ARCH: ${{ inputs.arch }}
         run: |
-          docker exec -i -e KERNEL -e VARIANTS -e ARCH -e RUNNER_TEMP \
+          docker exec -i -e KERNEL -e VARIANTS -e ARCH -e RUNNER_TEMP -e GITHUB_ACTIONS \
             "$CI_CONTAINER" bash -e <<'BASH'
           args=(--kernel "$KERNEL" --stages validate,build,test --fail-on-skip --gpu-arch "$ARCH")
           if [ "$VARIANTS" = "ci" ]; then
