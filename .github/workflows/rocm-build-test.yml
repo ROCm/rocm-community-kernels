@@ -13,14 +13,23 @@
 # [ci-runners] in ci/community.toml: a kernel is tested on each GPU in its rocm-archs
 # that has a runner there. One GPU is enough; the kernels_ci tests use one. kernel_ci.py
 # --gpu-arch fails the job if the runner's GPU isn't the one it was routed for. A
-# runner needs Docker able to pull the CI image (for a Kubernetes runner set, a container mode
-# that allows `container:`) and a ROCm driver exposing /dev/kfd and /dev/dri. The
-# job runs in the CI image, with those two devices passed in: ci/docker/Dockerfile,
-# which ci-image.yml builds and pushes to the GitHub Container Registry. The job uses
-# its `latest` tag, which only main pushes, so the image is always one built from
-# reviewed code; the job prints the commit it was built from. The image provides:
+# runner needs a Docker daemon the job can use (for a Kubernetes runner set, a mode
+# with one, such as dind) and a ROCm driver exposing /dev/kfd and /dev/dri.
+#
+# The actions run on the runner itself, with its own Node. The job starts the CI
+# image with `docker run`, with the GPU passed in, and runs the build and the tests in
+# it with `docker exec`; the workspace and RUNNER_TEMP are mounted at the same paths,
+# so the host steps see what the container writes. (Not `container:`: that runs the
+# actions inside the image with a Node the runner mounts at /__e, which fails when
+# that mount lacks the Node version an action needs.) The image is
+# ci/docker/Dockerfile, which ci-image.yml builds and pushes to the GitHub Container
+# Registry. The job pulls its `latest` tag, which only main pushes, so the image is
+# always one built from reviewed code; the job prints the commit it was built from.
+# The image provides:
 #
 #   - Python 3.12 as `python` and `python3`; git and curl;
+#   - gcc and libc6-dev, for the C launcher Triton compiles the first time a kernel
+#     runs (the Nix-built tests don't bring a C compiler);
 #   - Nix on PATH with flakes, using Hugging Face's binary cache (kernel_ci.py
 #     fails the build without it):
 #       extra-substituters = https://huggingface.cachix.org
@@ -34,8 +43,8 @@
 # could leak into them, since Nix runs unsandboxed there. (publish.yml's verify job is
 # different: it runs in a ROCm PyTorch image, CI_USER_IMAGE, as a user would.)
 #
-# Each job starts fresh from the image. No job here gets secrets, because pull
-# request code runs in it.
+# Each job starts a fresh container from the image and removes it at the end. No job
+# here gets secrets, because pull request code runs in it.
 
 name: ROCm build and test
 
@@ -72,10 +81,6 @@ jobs:
   build-test:
     name: Build and GPU test (${{ inputs.arch }})
     runs-on: ${{ inputs.runner }}
-    # The CI image (see the header).
-    container:
-      image: ghcr.io/rocm/rocm-community-kernels-ci:latest # zizmor: ignore[unpinned-images] only main pushes latest
-      options: --device /dev/kfd --device /dev/dri --group-add video
     # Compiled kernels with every variant can take hours.
     timeout-minutes: 720
     steps:
@@ -108,8 +113,34 @@ jobs:
         with:
           persist-credentials: false
 
+      # The CI image (see the header). A runner pod lists the render devices of its own
+      # GPU in /etc/podinfo/gha-render-devices; elsewhere the job gets all of /dev/dri.
+      # The container runs as root (the image's Nix is root's), so git, and Nix's
+      # flakes, are told to trust the workspace the runner's user checked out.
+      - name: Start the CI container
+        env:
+          IMAGE: ghcr.io/rocm/rocm-community-kernels-ci:latest # zizmor: ignore[unpinned-images] only main pushes latest
+          KERNEL: ${{ inputs.kernel }}
+          ARCH: ${{ inputs.arch }}
+        run: |
+          if [ -f /etc/podinfo/gha-render-devices ]; then
+            DEVICE_FLAG=$(cat /etc/podinfo/gha-render-devices)
+          else
+            DEVICE_FLAG="--device /dev/dri"
+          fi
+          # One job per kernel and GPU in a run: unique, if runners share a Docker daemon.
+          name="rck-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$KERNEL-$ARCH"
+          # shellcheck disable=SC2086 # DEVICE_FLAG holds one or more --device options
+          docker run -dt --pull always --name "$name" \
+            --device /dev/kfd $DEVICE_FLAG --group-add video \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -v "$RUNNER_TEMP:$RUNNER_TEMP" \
+            -w "$GITHUB_WORKSPACE" "$IMAGE"
+          echo "CI_CONTAINER=$name" >> "$GITHUB_ENV"
+          docker exec "$name" git config --global --add safe.directory '*'
+
       - name: Show toolchain and GPU
         run: |
+          docker exec -i "$CI_CONTAINER" bash -e <<'BASH'
           echo "CI image built from commit ${CI_IMAGE_REVISION:-unknown}"
           python --version
           nix --version
@@ -119,22 +150,28 @@ jobs:
             rocminfo | grep -E '^\s+Name:\s+gfx' | sort -u
           fi
           grep -h gfx_target_version /sys/class/kfd/kfd/topology/nodes/*/properties | sort -u || true
+          BASH
 
       # validate (wrapping and community rules, kernel-builder check-config),
       # build (nix build, check-abi), test (nix build the ROCm 7.1 .#ciTests.<variant>,
-      # run it on the GPU).
+      # run it on the GPU). GITHUB_ACTIONS turns on kernel_ci.py's ::error and ::warning
+      # annotations; docker exec passes only the variables it is given.
       - name: Build and test
         env:
           KERNEL: ${{ inputs.kernel }}
           VARIANTS: ${{ inputs.variants }}
           ARCH: ${{ inputs.arch }}
         run: |
+          docker exec -i -e KERNEL -e VARIANTS -e ARCH -e RUNNER_TEMP -e GITHUB_ACTIONS \
+            "$CI_CONTAINER" bash -e <<'BASH'
           args=(--kernel "$KERNEL" --stages validate,build,test --fail-on-skip --gpu-arch "$ARCH")
           if [ "$VARIANTS" = "ci" ]; then
             args+=(--ci)
           fi
+          # stdin is this script: keep the build and the kernel's tests from reading it.
           python scripts/kernel_ci.py run "${args[@]}" \
-            --out "$RUNNER_TEMP/ci-out" --run-id "$KERNEL"
+            --out "$RUNNER_TEMP/ci-out" --run-id "$KERNEL" < /dev/null
+          BASH
 
       - name: Write job summary
         if: always()
@@ -167,3 +204,16 @@ jobs:
           path: ${{ runner.temp }}/ci-out/${{ inputs.kernel }}/${{ inputs.kernel }}/build
           if-no-files-found: error
           retention-days: 3
+
+      # Hand what the container wrote back to the runner's user, writable (files copied
+      # from the Nix store are read-only), so a runner that isn't ephemeral can clean
+      # its work directory, then remove the container.
+      - name: Remove the CI container
+        if: always()
+        run: |
+          if [ -n "${CI_CONTAINER:-}" ]; then
+            docker exec "$CI_CONTAINER" chmod -R u+w "$GITHUB_WORKSPACE" "$RUNNER_TEMP" || true
+            docker exec "$CI_CONTAINER" \
+              chown -hR "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$RUNNER_TEMP" || true
+            docker rm -f "$CI_CONTAINER" || true
+          fi
