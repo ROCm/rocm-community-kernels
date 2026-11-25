@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: MIT
 #
 # The CI image: what the gfx950 "Build and GPU test" job runs in
-# (.github/workflows/rocm-build-test.yml). Slim on purpose: Python, git and Nix
-# using Hugging Face's binary cache. No ROCm and no PyTorch: Nix fetches the exact
-# ones each kernel variant is built and tested with.
+# (.github/workflows/rocm-build-test.yml). Slim on purpose: Python, git, a C
+# compiler and Nix using Hugging Face's binary cache. No ROCm and no PyTorch: Nix
+# fetches the exact ones each kernel variant is built and tested with.
 #
 # Built and pushed to the GitHub Container Registry by .github/workflows/ci-image.yml.
 # It must never contain a secret: anyone can pull it, and pull request code runs in it.
@@ -14,10 +14,12 @@ FROM ubuntu:24.04@sha256:73b999393d07f2bf65a40373778a44dc9a6d54ad7718d29247d8ff9
 ARG NIX_INSTALLER_VERSION=v3.24.2
 
 # Python 3.12 (as python and python3) runs scripts/kernel_ci.py; git is for Nix
-# flakes on the workspace the job mounts; xz-utils for the Nix installer.
+# flakes on the workspace the job mounts; xz-utils for the Nix installer. gcc and
+# libc6-dev: Triton compiles a small C launcher with the C compiler on PATH the
+# first time a kernel runs, and the Nix-built tests don't bring one.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl git xz-utils python3 python-is-python3 \
+        ca-certificates curl git xz-utils python3 python-is-python3 gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Determinate Nix, pinned. --init none: no daemon (a container has no init system).

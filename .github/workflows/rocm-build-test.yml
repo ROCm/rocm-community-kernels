@@ -28,6 +28,8 @@
 # The image provides:
 #
 #   - Python 3.12 as `python` and `python3`; git and curl;
+#   - gcc and libc6-dev, for the C launcher Triton compiles the first time a kernel
+#     runs (the Nix-built tests don't bring a C compiler);
 #   - Nix on PATH with flakes, using Hugging Face's binary cache (kernel_ci.py
 #     fails the build without it):
 #       extra-substituters = https://huggingface.cachix.org
