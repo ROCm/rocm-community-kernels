@@ -286,8 +286,10 @@ def test_runners_are_github_hosted_or_from_the_ci_table():
 
 
 def test_gpu_jobs_run_in_the_ci_image():
-    """Jobs on the GPU runners run in a CI image, with the GPU devices passed in,
-    and get no secrets: pull request code runs on those runners."""
+    """Jobs on the GPU runners start a CI image themselves (`docker run`, not
+    `container:`, so actions run on the runner with its own Node), with the GPU
+    devices passed in, remove it at the end, and get no secrets: pull request code
+    runs on those runners."""
     gpu_jobs = 0
     for wf in sorted(WORKFLOWS.glob("*.yml")):
         for job, block in job_blocks(wf.read_text()).items():
@@ -297,15 +299,26 @@ def test_gpu_jobs_run_in_the_ci_image():
             gpu_jobs += 1
             where = f"{wf.name}: {job}"
             assert "secrets." not in block, f"{where}: uses a secret"
-            has_container = re.search(r"^    container:\n", block, re.M)
-            assert has_container, f"{where}: no container"
+            assert not re.search(
+                r"^    container:", block, re.M
+            ), f"{where}: uses container:"
             image = (
-                r"^      image: (ghcr\.io/rocm/rocm-community-kernels-ci:latest"
+                r"^          IMAGE: (ghcr\.io/rocm/rocm-community-kernels-ci:latest"
                 r"|\$\{\{ vars\.CI_USER_IMAGE )"
             )
             assert re.search(image, block, re.M), f"{where}: not a known image"
-            options = re.search(r"^      options: (.*)$", block, re.M)
-            assert options, f"{where}: no container options"
-            for device in ("/dev/kfd", "/dev/dri"):
-                assert f"--device {device}" in options.group(1), f"{where}: no {device}"
+            # Join shell continuation lines, so the command is one line.
+            run = re.search(r"docker run .*", re.sub(r"\\\n\s*", " ", block))
+            assert run, f"{where}: no docker run"
+            assert '"$IMAGE"' in run.group(0), f"{where}: docker run not of $IMAGE"
+            assert "--device /dev/kfd" in run.group(0), f"{where}: no /dev/kfd"
+            assert "/etc/podinfo/gha-render-devices" in block, f"{where}: no podinfo"
+            assert 'DEVICE_FLAG="--device /dev/dri"' in block, f"{where}: no /dev/dri"
+            cleanup = re.search(
+                r"^        if: always\(\)\n        run: \|\n(?:          .*\n|\n)*?"
+                r"\s+docker rm -f ",
+                block,
+                re.M,
+            )
+            assert cleanup, f"{where}: no always() step removing the container"
     assert gpu_jobs >= 2  # rocm-build-test.yml build-test, publish.yml verify

@@ -13,8 +13,8 @@ FROM ubuntu:24.04@sha256:73b999393d07f2bf65a40373778a44dc9a6d54ad7718d29247d8ff9
 
 ARG NIX_INSTALLER_VERSION=v3.24.2
 
-# Python 3.12 (as python and python3) runs scripts/kernel_ci.py; git is for
-# actions/checkout and Nix flakes; xz-utils for the Nix installer.
+# Python 3.12 (as python and python3) runs scripts/kernel_ci.py; git is for Nix
+# flakes on the workspace the job mounts; xz-utils for the Nix installer.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates curl git xz-utils python3 python-is-python3 \

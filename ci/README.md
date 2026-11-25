@@ -63,9 +63,14 @@ line there, in a pull request, once the runner meets the requirements below. The
 live in the repository, not in variables: pull requests from forks don't get the
 repository's variables.
 
-Each runner needs one GPU of that kind, Docker able to pull the CI image, and
-`/dev/kfd` and `/dev/dri`. The job checks it got the GPU it was routed for. GPU runners
-run pull request code, and publishing builds there too. They need to be:
+Each runner needs one GPU of that kind, a Docker daemon the job can use (for a
+Kubernetes runner set, a mode with one, such as dind) and able to pull the CI image,
+and `/dev/kfd` and `/dev/dri`, or the render devices of its own GPU listed in
+`/etc/podinfo/gha-render-devices`. The jobs start the image with `docker run` and
+run in it with `docker exec`; the actions run on the runner itself, so its runner
+version must support the Node they use (node24). The job checks it got the GPU it was
+routed for. GPU runners run pull request code, and publishing builds there too. They
+need to be:
 
 - ephemeral: a fresh runner for every job, so nothing a pull request job leaves
   behind (work directory, Docker image cache) reaches a later job;
