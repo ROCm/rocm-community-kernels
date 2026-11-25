@@ -23,8 +23,9 @@
 # actions inside the image with a Node the runner mounts at /__e, which fails when
 # that mount lacks the Node version an action needs.) The image is
 # ci/docker/Dockerfile, which ci-image.yml builds and pushes to the GitHub Container
-# Registry. The job pulls its `latest` tag, which only main pushes, so the image is
-# always one built from reviewed code; the job prints the commit it was built from.
+# Registry. The job pulls its `latest` tag, which only main pushes (and ci_setup, until
+# the CI is merged into main), so the image is always one built from reviewed code;
+# the job prints the commit it was built from.
 # The image provides:
 #
 #   - Python 3.12 as `python` and `python3`; git and curl;
@@ -119,7 +120,7 @@ jobs:
       # flakes, are told to trust the workspace the runner's user checked out.
       - name: Start the CI container
         env:
-          IMAGE: ghcr.io/rocm/rocm-community-kernels-ci:latest # zizmor: ignore[unpinned-images] only main pushes latest
+          IMAGE: ghcr.io/rocm/rocm-community-kernels-ci:latest # zizmor: ignore[unpinned-images] only reviewed branches push latest
           KERNEL: ${{ inputs.kernel }}
           ARCH: ${{ inputs.arch }}
         run: |
